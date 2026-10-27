@@ -4,8 +4,12 @@
 (function (global) {
   'use strict';
 
+  const GridMap = (typeof module !== 'undefined' && module.exports) ? require('./map.js') : global.GridMap;
+
   const STORAGE_KEY = 'rundenkampf-data-v1';
   const TYPES = ['levels', 'objects', 'allies', 'enemies'];
+
+  const TARGET_OPTIONS = [['single', 'Ein Ziel'], ['area', 'Fläche (Ziel + Nachbarfelder)'], ['all', 'Alle']];
 
   const characterFields = [
     { key: 'icon', label: 'Symbol', type: 'icon', default: '🙂' },
@@ -14,7 +18,9 @@
     { key: 'maxMp', label: 'MP', type: 'number', default: 20, min: 0 },
     { key: 'atk', label: 'Angriff', type: 'number', default: 10, min: 0 },
     { key: 'def', label: 'Verteidigung', type: 'number', default: 8, min: 0 },
-    { key: 'spd', label: 'Tempo', type: 'number', default: 10, min: 0 },
+    { key: 'spd', label: 'Tempo', type: 'number', default: 10, min: 0, hint: 'Bestimmt die Zugreihenfolge' },
+    { key: 'move', label: 'Bewegung', type: 'number', default: 3, min: 0, max: 20, hint: 'Felder pro Zug (auch diagonal)' },
+    { key: 'range', label: 'Angriffsreichweite', type: 'number', default: 1, min: 1, max: 20, hint: '1 = Nahkampf' },
   ];
 
   const skillsField = { key: 'skills', label: 'Fähigkeiten', type: 'skills', default: [], wide: true };
@@ -26,12 +32,17 @@
       fields: [
         { key: 'icon', label: 'Symbol', type: 'icon', default: '🗺️' },
         { key: 'name', label: 'Name', type: 'text', default: 'Neues Level' },
-        { key: 'maxParty', label: 'Max. Teamgröße', type: 'number', default: 3, min: 1, max: 6 },
-        { key: 'enemies', label: 'Gegner', type: 'pick', source: 'enemies', default: [], wide: true },
+        { key: 'maxParty', label: 'Max. Teamgröße', type: 'number', default: 3, min: 1, max: 8 },
+        {
+          key: 'goalRule', label: 'Siegbedingung', type: 'select', default: 'all',
+          options: [['all', 'Alle überlebenden Allys im Ziel'], ['one', 'Ein Ally im Ziel']],
+        },
+        { key: 'map', label: 'Map', type: 'map', default: () => GridMap.create(7, 10), wide: true },
+        { key: 'enemies', type: 'hidden', default: [] },
         { key: 'rewards', label: 'Belohnungen (Objekte)', type: 'pick', source: 'objects', default: [], wide: true },
         descField,
       ],
-      summary: (l) => (l.enemies || []).length + ' Gegner',
+      summary: (l) => l.map.w + '×' + l.map.h + ' Felder · ' + l.enemies.length + ' Gegner',
     },
     objects: {
       label: 'Objekte', singular: 'Objekt', icon: '🧪',
@@ -44,7 +55,8 @@
             ['buffAtk', 'Erhöht Angriff'], ['buffDef', 'Erhöht Verteidigung']],
         },
         { key: 'value', label: 'Wert', type: 'number', default: 30, min: 0 },
-        { key: 'target', label: 'Ziel', type: 'select', default: 'single', options: [['single', 'Ein Ziel'], ['all', 'Alle']] },
+        { key: 'target', label: 'Ziel', type: 'select', default: 'single', options: TARGET_OPTIONS },
+        { key: 'range', label: 'Reichweite', type: 'number', default: 1, min: 1, max: 20, hint: '1 = selbst oder Nachbarfeld' },
         descField,
       ],
       summary: (o) => {
@@ -55,50 +67,77 @@
     allies: {
       label: 'Allys', singular: 'Ally', icon: '🛡️',
       fields: characterFields.concat([skillsField, descField]),
-      summary: (c) => 'HP ' + c.maxHp + ' · ANG ' + c.atk + ' · VER ' + c.def,
+      summary: (c) => 'HP ' + c.maxHp + ' · ANG ' + c.atk + ' · BEW ' + c.move + ' · RW ' + c.range,
     },
     enemies: {
       label: 'Gegner', singular: 'Gegner', icon: '👹',
-      fields: characterFields.map((f) => (f.key === 'icon' ? Object.assign({}, f, { default: '👾' }) : f))
-        .concat([{ key: 'xp', label: 'EP-Belohnung', type: 'number', default: 10, min: 0 }, skillsField, descField]),
-      summary: (c) => 'HP ' + c.maxHp + ' · ANG ' + c.atk + ' · VER ' + c.def,
+      fields: characterFields.map((f) => (f.key === 'icon' ? Object.assign({}, f, { default: '👾' }) : f)).concat([
+        { key: 'sight', label: 'Sichtweite', type: 'number', default: 4, min: 0, max: 30, hint: 'Ab dieser Nähe greift der Gegner an' },
+        { key: 'xp', label: 'EP-Belohnung', type: 'number', default: 10, min: 0 },
+        skillsField, descField,
+      ]),
+      summary: (c) => 'HP ' + c.maxHp + ' · ANG ' + c.atk + ' · BEW ' + c.move + ' · RW ' + c.range,
     },
   };
 
+  const skill = (name, kind, power, mp, range, target) => ({ name, kind, power, mp, range, target: target || 'single' });
+  const at = (id, x, y) => ({ id, x, y });
+
   const SAMPLE = {
     objects: [
-      { id: 'o-heiltrank', icon: '🧪', name: 'Heiltrank', effect: 'heal', value: 40, target: 'single', description: 'Heilt eine Figur.' },
-      { id: 'o-aether', icon: '🔷', name: 'Äther', effect: 'mana', value: 15, target: 'single', description: 'Stellt MP wieder her.' },
-      { id: 'o-bombe', icon: '💣', name: 'Bombe', effect: 'damage', value: 25, target: 'all', description: 'Trifft alle Gegner.' },
-      { id: 'o-kraft', icon: '💪', name: 'Kraftelixier', effect: 'buffAtk', value: 5, target: 'single', description: 'Erhöht den Angriff für den Rest des Kampfes.' },
+      { id: 'o-heiltrank', icon: '🧪', name: 'Heiltrank', effect: 'heal', value: 40, target: 'single', range: 1, description: 'Heilt eine Figur.' },
+      { id: 'o-aether', icon: '🔷', name: 'Äther', effect: 'mana', value: 15, target: 'single', range: 1, description: 'Stellt MP wieder her.' },
+      { id: 'o-bombe', icon: '💣', name: 'Bombe', effect: 'damage', value: 25, target: 'area', range: 3, description: 'Wurfgeschoss mit Flächenschaden.' },
+      { id: 'o-kraft', icon: '💪', name: 'Kraftelixier', effect: 'buffAtk', value: 5, target: 'single', range: 1, description: 'Erhöht den Angriff für den Rest des Kampfes.' },
     ],
     allies: [
-      { id: 'a-ritter', icon: '🛡️', name: 'Ritter', maxHp: 140, maxMp: 10, atk: 14, def: 14, spd: 8,
-        skills: [{ name: 'Schildschlag', kind: 'damage', power: 8, mp: 3, target: 'single' }], description: 'Robust und zuverlässig.' },
-      { id: 'a-magierin', icon: '🧙', name: 'Magierin', maxHp: 80, maxMp: 40, atk: 9, def: 6, spd: 11,
-        skills: [{ name: 'Feuerball', kind: 'damage', power: 18, mp: 6, target: 'single' },
-          { name: 'Blitzsturm', kind: 'damage', power: 10, mp: 10, target: 'all' }], description: 'Mächtige Zauber, wenig Ausdauer.' },
-      { id: 'a-heiler', icon: '💚', name: 'Heiler', maxHp: 90, maxMp: 35, atk: 7, def: 8, spd: 10,
-        skills: [{ name: 'Heilen', kind: 'heal', power: 30, mp: 5, target: 'single' },
-          { name: 'Gruppenheilung', kind: 'heal', power: 18, mp: 12, target: 'all' }], description: 'Hält das Team am Leben.' },
-      { id: 'a-schurkin', icon: '🗡️', name: 'Schurkin', maxHp: 95, maxMp: 15, atk: 15, def: 7, spd: 15,
-        skills: [{ name: 'Doppelstich', kind: 'damage', power: 12, mp: 4, target: 'single' }], description: 'Schnell und gefährlich.' },
+      { id: 'a-ritter', icon: '🛡️', name: 'Ritter', maxHp: 140, maxMp: 10, atk: 14, def: 14, spd: 8, move: 3, range: 1,
+        skills: [skill('Schildschlag', 'damage', 8, 3, 1)], description: 'Robuster Nahkämpfer.' },
+      { id: 'a-magierin', icon: '🧙', name: 'Magierin', maxHp: 80, maxMp: 40, atk: 9, def: 6, spd: 11, move: 3, range: 1,
+        skills: [skill('Feuerball', 'damage', 18, 6, 4), skill('Blitzsturm', 'damage', 10, 10, 3, 'area')], description: 'Mächtige Fernzauber, wenig Ausdauer.' },
+      { id: 'a-heiler', icon: '💚', name: 'Heiler', maxHp: 90, maxMp: 35, atk: 7, def: 8, spd: 10, move: 3, range: 1,
+        skills: [skill('Heilen', 'heal', 30, 5, 3), skill('Gruppenheilung', 'heal', 18, 12, 1, 'all')], description: 'Hält das Team am Leben.' },
+      { id: 'a-schurkin', icon: '🗡️', name: 'Schurkin', maxHp: 95, maxMp: 15, atk: 15, def: 7, spd: 15, move: 5, range: 1,
+        skills: [skill('Doppelstich', 'damage', 12, 4, 1)], description: 'Schnell und gefährlich.' },
+      { id: 'a-jaegerin', icon: '🏹', name: 'Jägerin', maxHp: 85, maxMp: 15, atk: 12, def: 6, spd: 12, move: 3, range: 4,
+        skills: [skill('Pfeilhagel', 'damage', 6, 6, 4, 'area')], description: 'Greift aus der Distanz an.' },
     ],
     enemies: [
-      { id: 'e-schleim', icon: '🟢', name: 'Schleim', maxHp: 40, maxMp: 0, atk: 8, def: 3, spd: 6, xp: 5, skills: [], description: '' },
-      { id: 'e-goblin', icon: '👺', name: 'Goblin', maxHp: 60, maxMp: 9, atk: 11, def: 5, spd: 12, xp: 10,
-        skills: [{ name: 'Wurfmesser', kind: 'damage', power: 6, mp: 3, target: 'single' }], description: '' },
-      { id: 'e-ork', icon: '👹', name: 'Ork', maxHp: 120, maxMp: 8, atk: 15, def: 9, spd: 7, xp: 25,
-        skills: [{ name: 'Keulenhieb', kind: 'damage', power: 10, mp: 4, target: 'single' }], description: '' },
-      { id: 'e-drache', icon: '🐉', name: 'Drache', maxHp: 320, maxMp: 50, atk: 18, def: 12, spd: 9, xp: 200,
-        skills: [{ name: 'Feueratem', kind: 'damage', power: 8, mp: 10, target: 'all' },
-          { name: 'Klauenhieb', kind: 'damage', power: 14, mp: 5, target: 'single' }], description: 'Der Endgegner.' },
+      { id: 'e-schleim', icon: '🟢', name: 'Schleim', maxHp: 40, maxMp: 0, atk: 8, def: 3, spd: 6, move: 2, range: 1, sight: 3, xp: 5, skills: [], description: 'Langsam und harmlos.' },
+      { id: 'e-fledermaus', icon: '🦇', name: 'Fledermaus', maxHp: 30, maxMp: 0, atk: 9, def: 2, spd: 16, move: 6, range: 1, sight: 6, xp: 6, skills: [], description: 'Sehr schnell.' },
+      { id: 'e-goblin', icon: '👺', name: 'Goblin', maxHp: 60, maxMp: 9, atk: 11, def: 5, spd: 12, move: 4, range: 1, sight: 5, xp: 10,
+        skills: [skill('Wurfmesser', 'damage', 6, 3, 3)], description: '' },
+      { id: 'e-schuetze', icon: '💀', name: 'Skelett-Schütze', maxHp: 45, maxMp: 0, atk: 11, def: 4, spd: 9, move: 2, range: 4, sight: 6, xp: 12, skills: [], description: 'Schießt aus der Ferne.' },
+      { id: 'e-ork', icon: '👹', name: 'Ork', maxHp: 120, maxMp: 8, atk: 15, def: 9, spd: 7, move: 3, range: 1, sight: 4, xp: 25,
+        skills: [skill('Keulenhieb', 'damage', 10, 4, 1)], description: '' },
+      { id: 'e-drache', icon: '🐉', name: 'Drache', maxHp: 320, maxMp: 50, atk: 20, def: 12, spd: 9, move: 3, range: 1, sight: 7, xp: 200,
+        skills: [skill('Feueratem', 'damage', 8, 10, 3, 'area'), skill('Klauenhieb', 'damage', 14, 5, 1)], description: 'Der Endgegner.' },
     ],
     levels: [
-      { id: 'l-wiese', icon: '🌿', name: 'Grüne Wiese', maxParty: 3, enemies: ['e-schleim', 'e-schleim', 'e-schleim'], rewards: ['o-heiltrank'], description: 'Ein leichter Einstieg.' },
-      { id: 'l-hoehle', icon: '🕳️', name: 'Goblin-Höhle', maxParty: 3, enemies: ['e-goblin', 'e-goblin', 'e-schleim'], rewards: ['o-aether', 'o-heiltrank'], description: '' },
-      { id: 'l-lager', icon: '⛺', name: 'Orklager', maxParty: 3, enemies: ['e-ork', 'e-goblin', 'e-goblin'], rewards: ['o-bombe'], description: '' },
-      { id: 'l-hort', icon: '🌋', name: 'Drachenhort', maxParty: 4, enemies: ['e-drache'], rewards: ['o-kraft'], description: 'Nur für erfahrene Teams.' },
+      {
+        id: 'l-wiese', icon: '🌿', name: 'Grüne Wiese', maxParty: 3, goalRule: 'all',
+        map: { w: 7, h: 9, rows: ['GGGGGGG', '.......', '.......', '...#...', '.......', '.#...#.', '.......', '.......', '..SSS..'] },
+        enemies: [at('e-schleim', 1, 2), at('e-schleim', 5, 2), at('e-schleim', 3, 4)],
+        rewards: ['o-heiltrank'], description: 'Ein leichter Einstieg.',
+      },
+      {
+        id: 'l-hoehle', icon: '🕳️', name: 'Goblin-Höhle', maxParty: 3, goalRule: 'all',
+        map: { w: 8, h: 11, rows: ['##GGGG##', '#......#', '#.#..#.#', '#......#', '###..###', '#......#', '#.#..#.#', '#......#', '###..###', '#......#', '##SSSS##'] },
+        enemies: [at('e-goblin', 3, 1), at('e-goblin', 5, 3), at('e-schleim', 2, 3), at('e-fledermaus', 1, 5)],
+        rewards: ['o-aether', 'o-heiltrank'], description: 'Enge Gänge – die Gegner versperren den Weg.',
+      },
+      {
+        id: 'l-lager', icon: '⛺', name: 'Orklager', maxParty: 4, goalRule: 'all',
+        map: { w: 9, h: 12, rows: ['GGGGGGGGG', '.........', '..#...#..', '..#...#..', '.........', '###.#.###', '.........', '.........', '..#...#..', '.........', '.........', '..SSSS...'] },
+        enemies: [at('e-ork', 4, 3), at('e-ork', 4, 9), at('e-schuetze', 1, 1), at('e-schuetze', 7, 1), at('e-goblin', 2, 6), at('e-goblin', 6, 6)],
+        rewards: ['o-bombe'], description: 'Schützen decken den Ausgang.',
+      },
+      {
+        id: 'l-hort', icon: '🌋', name: 'Drachenhort', maxParty: 4, goalRule: 'all',
+        map: { w: 9, h: 14, rows: ['GGGGGGGGG', '#.......#', '#.......#', '##..#..##', '#.......#', '#.......#', '#.......#', '###...###', '#.......#', '#.......#', '#..#.#..#', '#.......#', '#.......#', '##SSSSS##'] },
+        enemies: [at('e-drache', 4, 5), at('e-fledermaus', 2, 9), at('e-fledermaus', 6, 9), at('e-schuetze', 2, 2), at('e-schuetze', 6, 2)],
+        rewards: ['o-kraft'], description: 'Alle müssen am Drachen vorbei.',
+      },
     ],
   };
 
@@ -110,20 +149,54 @@
     return { levels: [], objects: [], allies: [], enemies: [] };
   }
 
-  function normalize(raw) {
-    const data = emptyData();
-    TYPES.forEach((t) => {
-      if (Array.isArray(raw && raw[t])) data[t] = raw[t].filter((x) => x && x.id).map((x) => withDefaults(t, x));
-    });
-    return data;
+  function defaultOf(f) {
+    return typeof f.default === 'function' ? f.default() : clone(f.default);
   }
 
   function withDefaults(type, item) {
     const out = Object.assign({}, item);
     SCHEMAS[type].fields.forEach((f) => {
-      if (out[f.key] === undefined) out[f.key] = clone(f.default);
+      if (out[f.key] === undefined) out[f.key] = defaultOf(f);
     });
     return out;
+  }
+
+  // Ältere Daten (ohne Map/Reichweiten) auf das aktuelle Format bringen
+  function migrate(type, item) {
+    if (type === 'levels') {
+      item.map = GridMap.normalize(item.map);
+      let auto = 0;
+      item.enemies = (item.enemies || []).map((e) => {
+        if (typeof e === 'string') {
+          const i = auto++;
+          const x = (i * 2 + 1) % item.map.w;
+          const y = Math.min(item.map.h - 2, 1 + Math.floor((i * 2 + 1) / item.map.w));
+          return { id: e, x, y };
+        }
+        return e && e.id ? { id: e.id, x: Math.round(Number(e.x)) || 0, y: Math.round(Number(e.y)) || 0 } : null;
+      }).filter((e) => e && GridMap.inside(item.map, e.x, e.y));
+    }
+    if (type === 'allies' || type === 'enemies') {
+      item.skills = (item.skills || []).map((s) => Object.assign({}, s, {
+        range: s.range === undefined ? 3 : s.range,
+        target: s.target === 'all' && s.kind !== 'heal' && s.range === undefined ? 'area' : s.target,
+      }));
+    }
+    if (type === 'objects' && item.range === undefined && item.effect === 'damage') {
+      item.range = 3;
+      if (item.target === 'all') item.target = 'area';
+    }
+    return item;
+  }
+
+  function normalize(raw) {
+    const data = emptyData();
+    TYPES.forEach((t) => {
+      if (Array.isArray(raw && raw[t])) {
+        data[t] = raw[t].filter((x) => x && x.id).map((x) => withDefaults(t, migrate(t, Object.assign({}, x))));
+      }
+    });
+    return data;
   }
 
   const Store = {
@@ -133,7 +206,7 @@
       let raw = null;
       try { raw = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch (e) { raw = null; }
       this.data = raw ? normalize(raw) : clone(SAMPLE);
-      if (!raw) this.save();
+      this.save();
     },
 
     save() {
@@ -169,7 +242,7 @@
       this.data[type] = this.data[type].filter((x) => x.id !== id);
       // Verweise in Leveln aufräumen
       this.data.levels.forEach((l) => {
-        if (type === 'enemies') l.enemies = l.enemies.filter((x) => x !== id);
+        if (type === 'enemies') l.enemies = l.enemies.filter((e) => e.id !== id);
         if (type === 'objects') l.rewards = l.rewards.filter((x) => x !== id);
       });
       this.save();
@@ -189,7 +262,7 @@
     clear() { this.data = emptyData(); this.save(); },
   };
 
-  const Data = { SCHEMAS, SAMPLE, TYPES, Store, clone };
+  const Data = { SCHEMAS, SAMPLE, TYPES, TARGET_OPTIONS, Store, clone, normalize };
   if (typeof module !== 'undefined' && module.exports) module.exports = Data;
   else global.Data = Data;
 })(this);

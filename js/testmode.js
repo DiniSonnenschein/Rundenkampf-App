@@ -1,4 +1,4 @@
-/* Test-Modus: Kämpfe mit selbst erstellten Leveln, Allys und Objekten ausprobieren. */
+/* Test-Modus: Kämpfe auf der Level-Map mit selbst erstellten Allys und Objekten ausprobieren. */
 (function (global) {
   'use strict';
 
@@ -8,7 +8,7 @@
 
   const setup = { levelId: null, allyIds: [], items: {}, customEnemies: [], auto: false, speed: 600 };
   let root = null;
-  let fight = null;     // { state, level, awaiting, menu, pending }
+  let fight = null;     // { state, level, awaiting, mode, menu, inspect }
   let timer = null;
   let simResult = null;
 
@@ -20,11 +20,6 @@
   function maxParty() {
     const l = level();
     return l ? Math.max(1, Number(l.maxParty) || 1) : 4;
-  }
-
-  function enemyIds() {
-    const l = level();
-    return l ? l.enemies : setup.customEnemies;
   }
 
   function sanitizeSetup() {
@@ -59,9 +54,15 @@
   }
 
   function battleOptions() {
+    const l = level();
+    const enemies = l
+      ? l.enemies.map((p) => ({ def: Store.get('enemies', p.id), x: p.x, y: p.y }))
+      : setup.customEnemies.map((id) => ({ def: Store.get('enemies', id) }));
     return {
+      map: l ? l.map : GridMap.create(7, 10),
+      goalRule: l ? l.goalRule : 'all',
       allies: setup.allyIds.map((id) => Store.get('allies', id)).filter(Boolean),
-      enemies: enemyIds().map((id) => Store.get('enemies', id)).filter(Boolean),
+      enemies: enemies.filter((e) => e.def),
       items: Object.assign({}, setup.items),
       itemDefs: Store.list('objects'),
     };
@@ -80,18 +81,19 @@
       '<option value="' + esc(x.id) + '"' + (x.id === setup.levelId ? ' selected' : '') + '>' + esc(x.icon + ' ' + x.name) + '</option>'
     ).join('') + '<option value="' + CUSTOM + '"' + (setup.levelId === CUSTOM ? ' selected' : '') + '>✏️ Freie Gegnerauswahl</option>';
 
-    const enemyPreview = l
-      ? '<ul class="chips">' + UI.countIds(l.enemies).map(([id, n]) => {
-        const e = Store.get('enemies', id);
-        return e ? '<li>' + esc(e.icon + ' ' + e.name) + (n > 1 ? ' ×' + n : '') + '</li>' : '';
-      }).join('') + '</ul>' + (l.description ? '<p class="muted">' + esc(l.description) + '</p>' : '')
-      : UI.picklist('customEnemies', setup.customEnemies, 'enemies');
+    // Vorschau: so stehen alle zu Kampfbeginn
+    const preview = Battle.create(Object.assign({}, opts, { quiet: true }));
+    const levelInfo = (l
+      ? '<p class="muted">' + esc(l.goalRule === 'one' ? 'Sieg: Ein Ally erreicht das Ziel.' : 'Sieg: Alle überlebenden Allys erreichen das Ziel.') +
+        (l.description ? ' ' + esc(l.description) : '') + '</p>'
+      : UI.picklist('customEnemies', setup.customEnemies, 'enemies') + '<p class="muted">Standard-Map 7×10, Gegner werden oben platziert.</p>') +
+      '<div class="board preview">' + boardHtml(preview, {}) + '</div>';
 
     const allyCards = allies.map((a) => {
       const on = setup.allyIds.includes(a.id);
       return '<button class="ally-pick' + (on ? ' on' : '') + '" data-act="toggle-ally" data-id="' + esc(a.id) + '">' +
         '<span class="ent-icon">' + esc(a.icon) + '</span><b>' + esc(a.name) + '</b>' +
-        '<small>HP ' + a.maxHp + ' · MP ' + a.maxMp + ' · ANG ' + a.atk + ' · VER ' + a.def + ' · TEM ' + a.spd + '</small></button>';
+        '<small>HP ' + a.maxHp + ' · ANG ' + a.atk + ' · VER ' + a.def + ' · TEM ' + a.spd + ' · BEW ' + a.move + ' · RW ' + a.range + '</small></button>';
     }).join('') || '<p class="muted">Lege zuerst Allys an.</p>';
 
     const itemRows = objects.map((o) =>
@@ -99,11 +101,11 @@
       '<input type="number" min="0" max="99" data-item="' + esc(o.id) + '" value="' + (setup.items[o.id] || 0) + '"></label>'
     ).join('') || '<p class="muted">Keine Objekte vorhanden.</p>';
 
-    const canStart = opts.allies.length > 0 && opts.enemies.length > 0;
+    const canStart = opts.allies.length > 0;
 
     root.innerHTML =
       '<div class="test-setup">' +
-      '<section class="panel"><h3>1 · Level</h3><select data-setup="level">' + levelOptions + '</select>' + enemyPreview + '</section>' +
+      '<section class="panel"><h3>1 · Level</h3><select data-setup="level">' + levelOptions + '</select>' + levelInfo + '</section>' +
       '<section class="panel"><h3>2 · Team <small class="muted">(' + setup.allyIds.length + ' / ' + maxParty() + ')</small></h3>' +
       '<div class="ally-grid">' + allyCards + '</div></section>' +
       '<section class="panel"><h3>3 · Inventar</h3><div class="item-grid">' + itemRows + '</div></section>' +
@@ -117,7 +119,7 @@
       '<button class="primary big" data-act="start"' + (canStart ? '' : ' disabled') + '>⚔️ Kampf starten</button>' +
       '<button data-act="simulate"' + (canStart ? '' : ' disabled') + ' title="100 Kämpfe automatisch durchspielen">📊 Simulation ×100</button>' +
       '</div>' +
-      (canStart ? '' : '<p class="muted">Wähle mindestens einen Ally und einen Gegner.</p>') +
+      (canStart ? '' : '<p class="muted">Wähle mindestens einen Ally.</p>') +
       renderSim() +
       '</section></div>';
   }
@@ -131,82 +133,167 @@
       '<div><b>' + pct(r.winRate) + '</b><small>Siege</small></div>' +
       '<div><b>' + r.avgRounds.toFixed(1) + '</b><small>Ø Runden</small></div>' +
       '<div><b>' + pct(r.avgHpLeft) + '</b><small>Ø Team-HP übrig</small></div>' +
-      '</div><table class="survival"><tbody>' +
-      Object.values(r.survival).map((s) =>
-        '<tr><td>' + esc(s.icon + ' ' + s.name) + '</td><td>überlebt in ' + pct(s.alive / r.runs) + '</td></tr>').join('') +
+      '</div><table class="survival"><thead><tr><th></th><th>im Ziel</th><th>überlebt</th></tr></thead><tbody>' +
+      Object.values(r.units).map((s) =>
+        '<tr><td>' + esc(s.icon + ' ' + s.name) + '</td><td>' + pct(s.escaped / r.runs) + '</td><td>' + pct(s.alive / r.runs) + '</td></tr>').join('') +
       '</tbody></table>' +
       (r.draws ? '<p class="muted">' + r.draws + ' Kämpfe nach ' + Battle.MAX_ROUNDS + ' Runden abgebrochen.</p>' : '') +
+      '<p class="muted">Die KI läuft möglichst direkt zum Ziel und greift unterwegs an.</p>' +
       '</div>';
+  }
+
+  /* ---------- Spielfeld ---------- */
+
+  /**
+   * Zeichnet die Map mit Einheiten.
+   * @param {object} hl  { reach: Set, range: Set, targets: Set(uid), inspect: uid, clickable: bool }
+   */
+  function boardHtml(s, hl) {
+    const m = s.map;
+    let html = '<div class="grid' + (hl.clickable ? ' playing' : '') + '" style="--w:' + m.w + ';--h:' + m.h + '">';
+    for (let y = 0; y < m.h; y++) {
+      for (let x = 0; x < m.w; x++) {
+        const k = GridMap.key(m, x, y);
+        const u = Battle.unitAt(s, x, y);
+        const cls = ['tile', UI.tileClass(m.rows[y][x])];
+        if (Battle.isGoal(s, x, y)) cls.push('goal');
+        if (hl.reach && hl.reach.has(k)) cls.push('reach');
+        if (hl.range && hl.range.has(k)) cls.push('inrange');
+        if (u && hl.targets && hl.targets.has(u.uid)) cls.push('target');
+        html += '<div class="' + cls.join(' ') + '" data-x="' + x + '" data-y="' + y + '">' + (u ? tokenHtml(s, u, hl) : '') + '</div>';
+      }
+    }
+    return html + '</div>';
+  }
+
+  function tokenHtml(s, u, hl) {
+    const ev = s.events.filter((e) => e.uid === u.uid);
+    const pct = Math.max(0, Math.round((u.hp / u.maxHp) * 100));
+    const idle = u.side === 'enemy' && !u.alerted;
+    const cls = ['token', u.side,
+      s.current === u.uid && !s.winner ? 'current' : '',
+      hl.inspect === u.uid ? 'inspected' : '',
+      idle ? 'idle' : '',
+      ev.some((e) => e.kind === 'dmg') ? 'hit' : ''].join(' ');
+    return '<div class="' + cls + '" title="' + esc(u.name) + '">' +
+      ev.filter((e) => e.kind !== 'move').map((e) =>
+        '<span class="float ' + e.kind + '">' + (e.kind === 'dmg' ? '−' : '+') + e.amount + '</span>').join('') +
+      '<span class="token-icon">' + esc(u.icon) + '</span>' +
+      (u.defending ? '<span class="badge">🛡️</span>' : idle ? '<span class="badge">💤</span>' : '') +
+      '<span class="mini-hp"><span style="width:' + pct + '%"></span></span></div>';
+  }
+
+  function tilesInRange(s, actor, range) {
+    const out = new Set();
+    const m = s.map;
+    for (let y = actor.y - range; y <= actor.y + range; y++) {
+      for (let x = actor.x - range; x <= actor.x + range; x++) {
+        if (GridMap.inside(m, x, y)) out.add(GridMap.key(m, x, y));
+      }
+    }
+    return out;
   }
 
   /* ---------- Kampf ---------- */
 
   function start() {
-    const opts = battleOptions();
-    fight = { state: Battle.create(opts), level: level(), awaiting: null, menu: 'main', pending: null };
+    fight = { state: Battle.create(battleOptions()), level: level(), awaiting: null, mode: null, menu: 'main', inspect: null };
     step();
+    window.scrollTo(0, 0);
   }
 
+  /** Nächste Einheit an die Reihe bringen. */
   function step() {
     stop();
     if (!fight) return;
     const s = fight.state;
     const actor = Battle.next(s);
-    if (!actor) { renderBattle(); return; }
+    fight.menu = 'main';
+    fight.inspect = null;
+    if (!actor) { fight.awaiting = null; fight.mode = null; renderBattle(); return; }
     if (actor.side === 'enemy' || setup.auto) {
       fight.awaiting = null;
+      fight.mode = null;
       renderBattle();
-      timer = setTimeout(() => {
-        Battle.act(s, actor, Battle.ai(s, actor));
-        step();
-      }, setup.speed);
+      // Schlafende Gegner ohne Verzögerung überspringen
+      timer = setTimeout(aiLoop, actor.side === 'enemy' && !actor.alerted ? 0 : setup.speed);
     } else {
       fight.awaiting = actor;
-      fight.menu = 'main';
-      fight.pending = null;
+      fight.mode = 'move';
       renderBattle();
     }
   }
 
-  function choose(action) {
-    const actor = fight.awaiting;
-    const info = Battle.actionInfo(fight.state, actor, action);
-    if (!info.valid) { UI.toast(info.reason || 'Nicht möglich'); return; }
-    if (info.scope === 'single') {
-      fight.pending = action;
+  function aiLoop() {
+    if (!fight) return;
+    const s = fight.state;
+    const actor = Battle.byUid(s, s.current);
+    if (actor && Battle.aiStep(s, actor)) {
       renderBattle();
+      timer = setTimeout(aiLoop, setup.speed);
     } else {
-      perform(action);
+      step();
     }
   }
 
-  function perform(action) {
-    const actor = fight.awaiting;
-    fight.awaiting = null;
-    fight.pending = null;
-    Battle.act(fight.state, actor, action);
-    step();
+  /** Nach einer Spieler-Aktion: Zug beenden oder weitermachen. */
+  function afterPlayerStep() {
+    if (Battle.turnDone(fight.state)) { step(); return; }
+    fight.menu = 'main';
+    fight.mode = fight.state.turn.moved ? null : 'move';
+    renderBattle();
   }
 
-  function unitCard(u, s) {
-    const targetable = fight.pending && fight.awaiting &&
-      Battle.targets(s, fight.awaiting, fight.pending).some((t) => t.uid === u.uid);
-    const ev = s.events.filter((e) => e.uid === u.uid);
-    const cls = ['unit', u.side,
-      u.hp <= 0 ? 'dead' : '',
-      s.current === u.uid && !s.winner ? 'current' : '',
-      targetable ? 'targetable' : '',
-      ev.some((e) => e.kind === 'dmg') ? 'hit' : ''].join(' ');
+  function chooseAction(action) {
+    const s = fight.state;
+    const info = Battle.actionInfo(s, fight.awaiting, action);
+    if (!info.valid) { UI.toast(info.reason || 'Nicht möglich'); return; }
+    if (info.scope === 'none' || info.scope === 'all') {
+      Battle.act(s, fight.awaiting, action);
+      afterPlayerStep();
+      return;
+    }
+    fight.mode = action;
+    if (!Battle.targets(s, fight.awaiting, action).length) UI.toast('Kein Ziel in Reichweite (' + info.range + ')');
+    renderBattle();
+  }
+
+  function onTile(x, y) {
+    const s = fight.state;
+    const a = fight.awaiting;
+    const u = Battle.unitAt(s, x, y);
+    if (a && fight.mode === 'move' && Battle.reachable(s, a).some((t) => t.x === x && t.y === y)) {
+      Battle.move(s, a, x, y);
+      afterPlayerStep();
+      return;
+    }
+    if (a && fight.mode && fight.mode !== 'move' && u &&
+      Battle.targets(s, a, fight.mode).some((t) => t.uid === u.uid)) {
+      Battle.act(s, a, Object.assign({}, fight.mode, { target: u.uid }));
+      afterPlayerStep();
+      return;
+    }
+    fight.inspect = u ? u.uid : null;
+    renderBattle();
+  }
+
+  function unitInfo(u, s) {
+    if (!u) return '';
     const status = [
-      u.defending ? '🛡️' : '',
-      u.buffAtk ? '⚔️+' + u.buffAtk : '',
-      u.buffDef ? '🛡+' + u.buffDef : '',
-    ].filter(Boolean).join(' ');
-    return '<div class="' + cls + '"' + (targetable ? ' data-act="target" data-uid="' + u.uid + '"' : '') + '>' +
-      ev.map((e) => '<span class="float ' + e.kind + '">' + (e.kind === 'dmg' ? '−' : '+') + e.amount + '</span>').join('') +
-      '<div class="unit-icon">' + esc(u.icon) + '</div>' +
-      '<div class="unit-body"><div class="unit-name">' + esc(u.name) + ' <small>' + status + '</small></div>' +
-      UI.bar(u.hp, u.maxHp, 'hp') + (u.maxMp ? UI.bar(u.mp, u.maxMp, 'mp') : '') + '</div></div>';
+      u.escaped ? '🏁 im Ziel' : '',
+      u.hp <= 0 ? '💀 besiegt' : '',
+      u.defending ? '🛡️ verteidigt' : '',
+      u.side === 'enemy' && !u.alerted ? '💤 hat euch noch nicht bemerkt (Sicht ' + u.sight + ')' : '',
+      u.buffAtk ? '⚔️ +' + u.buffAtk : '',
+      u.buffDef ? '🛡 +' + u.buffDef : '',
+    ].filter(Boolean).join(' · ');
+    return '<div class="unit-info ' + u.side + '">' +
+      '<div class="unit-info-head"><span class="unit-icon">' + esc(u.icon) + '</span><b>' + esc(u.name) + '</b>' +
+      (s.current === u.uid ? ' <small class="muted">ist am Zug</small>' : '') + '</div>' +
+      UI.bar(u.hp, u.maxHp, 'hp') + (u.maxMp ? UI.bar(u.mp, u.maxMp, 'mp') : '') +
+      '<div class="stats">ANG ' + (u.atk + u.buffAtk) + ' · VER ' + (u.def + u.buffDef) + ' · TEM ' + u.spd +
+      ' · BEW ' + u.move + ' · RW ' + u.range + '</div>' +
+      (status ? '<div class="stats">' + status + '</div>' : '') + '</div>';
   }
 
   function actionPanel(s) {
@@ -216,48 +303,58 @@
       const cur = Battle.byUid(s, s.current);
       return '<div class="action-panel waiting">' + (cur ? esc(cur.icon + ' ' + cur.name) + ' ist am Zug …' : '') + '</div>';
     }
-    const head = '<div class="action-head">' + esc(a.icon + ' ' + a.name) + ' ist am Zug</div>';
-    if (fight.pending) {
-      return '<div class="action-panel">' + head + '<p>Wähle ein Ziel aus (Karte antippen).</p>' +
-        '<button data-act="back">← Zurück</button></div>';
-    }
+    const t = s.turn;
+    let hint = '';
+    if (fight.mode === 'move') hint = 'Tippe auf ein markiertes Feld, um dich zu bewegen (bis zu ' + a.move + ' Felder).';
+    else if (fight.mode) hint = 'Wähle ein rot markiertes Ziel (Reichweite ' + Battle.actionInfo(s, a, fight.mode).range + ').';
+    else if (!t.acted) hint = 'Wähle eine Aktion.';
+
+    const on = (cond) => (cond ? ' class="on"' : '');
     let buttons = '';
     if (fight.menu === 'main') {
       buttons =
-        '<button data-act="do-attack">⚔️ Angriff</button>' +
-        '<button data-act="menu" data-menu="skill"' + (a.skills.length ? '' : ' disabled') + '>✨ Fähigkeit</button>' +
-        '<button data-act="menu" data-menu="item">🎒 Objekt</button>' +
-        '<button data-act="do-defend">🛡️ Verteidigen</button>';
+        '<button data-act="mode-move"' + (t.moved ? ' disabled' : '') + on(fight.mode === 'move') + '>🚶 Bewegen</button>' +
+        '<button data-act="do-attack"' + (t.acted ? ' disabled' : '') + on(fight.mode && fight.mode.type === 'attack') + '>⚔️ Angriff</button>' +
+        '<button data-act="menu" data-menu="skill"' + (t.acted || !a.skills.length ? ' disabled' : '') + on(fight.mode && fight.mode.type === 'skill') + '>✨ Fähigkeit</button>' +
+        '<button data-act="menu" data-menu="item"' + (t.acted ? ' disabled' : '') + on(fight.mode && fight.mode.type === 'item') + '>🎒 Objekt</button>' +
+        '<button data-act="do-defend"' + (t.acted ? ' disabled' : '') + '>🛡️ Verteidigen</button>' +
+        '<button data-act="end-turn" class="primary">⏭ Zug beenden</button>';
     } else if (fight.menu === 'skill') {
       buttons = a.skills.map((sk, i) =>
         '<button data-act="do-skill" data-i="' + i + '"' + (a.mp < sk.mp ? ' disabled' : '') + '>' +
         esc(sk.name) + ' <small>' + (sk.kind === 'heal' ? 'Heilung' : 'Schaden') + ' ' + sk.power +
-        (sk.target === 'all' ? ' · alle' : '') + ' · ' + sk.mp + ' MP</small></button>').join('') +
+        ' · RW ' + sk.range + (sk.target === 'area' ? ' · Fläche' : sk.target === 'all' ? ' · alle' : '') + ' · ' + sk.mp + ' MP</small></button>').join('') +
         '<button data-act="back">← Zurück</button>';
     } else if (fight.menu === 'item') {
       const ids = Object.keys(s.items).filter((id) => s.items[id] > 0 && s.itemDefs[id]);
       buttons = (ids.length ? ids.map((id) => {
         const d = s.itemDefs[id];
-        return '<button data-act="do-item" data-id="' + esc(id) + '">' + esc(d.icon + ' ' + d.name) + ' <small>×' + s.items[id] + '</small></button>';
+        return '<button data-act="do-item" data-id="' + esc(id) + '">' + esc(d.icon + ' ' + d.name) +
+          ' <small>×' + s.items[id] + ' · RW ' + (d.range || 1) + '</small></button>';
       }).join('') : '<p class="muted">Keine Objekte im Inventar.</p>') +
         '<button data-act="back">← Zurück</button>';
     }
-    return '<div class="action-panel">' + head + '<div class="action-buttons">' + buttons + '</div></div>';
+    return '<div class="action-panel"><div class="action-head">' + esc(a.icon + ' ' + a.name) + ' ist am Zug' +
+      ' <small class="muted">' + (t.moved ? '✓ bewegt' : '') + (t.acted ? ' ✓ gehandelt' : '') + '</small></div>' +
+      (hint ? '<p class="hint">' + esc(hint) + '</p>' : '') +
+      '<div class="action-buttons">' + buttons + '</div></div>';
   }
 
-  function resultOverlay(s) {
+  function resultBox(s) {
     if (!s.winner) return '';
     const win = s.winner === 'ally';
     let rewards = '';
     if (win) {
-      const xp = s.units.filter((u) => u.side === 'enemy').reduce((sum, u) => sum + u.xp, 0);
+      const xp = s.units.filter((u) => u.side === 'enemy' && u.hp <= 0).reduce((sum, u) => sum + u.xp, 0);
       const items = fight.level ? UI.countIds(fight.level.rewards).map(([id, n]) => {
         const o = Store.get('objects', id);
         return o ? esc(o.icon + ' ' + o.name) + (n > 1 ? ' ×' + n : '') : '';
       }).filter(Boolean).join(', ') : '';
-      rewards = '<p>Erhaltene EP: <b>' + xp + '</b></p>' + (items ? '<p>Belohnungen: ' + items + '</p>' : '');
+      const inGoal = s.units.filter((u) => u.escaped).map((u) => esc(u.icon)).join(' ');
+      rewards = '<p>Im Ziel: ' + inGoal + '</p><p>EP für besiegte Gegner: <b>' + xp + '</b></p>' +
+        (items ? '<p>Belohnungen: ' + items + '</p>' : '');
     }
-    const title = win ? '🏆 Sieg!' : s.winner === 'enemy' ? '💀 Niederlage' : '⏱ Unentschieden';
+    const title = win ? '🏆 Sieg!' : s.winner === 'enemy' ? '💀 Niederlage' : '⏱ Abgebrochen';
     return '<div class="result ' + s.winner + '"><h2>' + title + '</h2><p>nach ' + s.round + ' Runden</p>' + rewards +
       '<div class="start-row"><button class="primary" data-act="start">↻ Nochmal</button>' +
       '<button data-act="to-setup">Zurück zur Auswahl</button></div></div>';
@@ -265,11 +362,21 @@
 
   function renderBattle() {
     const s = fight.state;
-    const side = (name) => s.units.filter((u) => u.side === name).map((u) => unitCard(u, s)).join('');
+    const a = fight.awaiting;
+    const hl = { clickable: true, inspect: fight.inspect };
+    if (a && fight.mode === 'move') {
+      hl.reach = new Set(Battle.reachable(s, a).map((t) => GridMap.key(s.map, t.x, t.y)));
+    } else if (a && fight.mode) {
+      const info = Battle.actionInfo(s, a, fight.mode);
+      if (info.valid) hl.range = tilesInRange(s, a, info.range);
+      hl.targets = new Set(Battle.targets(s, a, fight.mode).map((u) => u.uid));
+    }
     const order = [s.current].concat(s.queue)
-      .map((uid) => Battle.byUid(s, uid)).filter((u) => u && u.hp > 0)
+      .map((uid) => Battle.byUid(s, uid)).filter((u) => u && Battle.isActive(u))
       .map((u, i) => '<span class="' + (i === 0 ? 'now ' : '') + u.side + '" title="' + esc(u.name) + '">' + esc(u.icon) + '</span>').join('');
-    const logHtml = s.log.slice(-60).map((l) => '<li class="' + l.kind + '">' + esc(l.text) + '</li>').join('');
+    const logHtml = s.log.slice(-80).map((l) => '<li class="' + l.kind + '">' + esc(l.text) + '</li>').join('');
+    const shown = Battle.byUid(s, fight.inspect) || Battle.byUid(s, s.current);
+    const escaped = s.units.filter((u) => u.escaped);
 
     root.innerHTML =
       '<div class="battle">' +
@@ -278,10 +385,12 @@
       '<div class="turn-order">' + (s.winner ? '' : order) + '</div>' +
       '<div><label class="check"><input type="checkbox" data-setup="auto"' + (setup.auto ? ' checked' : '') + '> Auto</label>' +
       ' <button data-act="to-setup" class="danger">Abbrechen</button></div></div>' +
-      '<div class="arena"><div class="side side-enemy">' + side('enemy') + '</div>' +
-      '<div class="side side-ally">' + side('ally') + '</div></div>' +
-      actionPanel(s) + resultOverlay(s) +
-      '<ul class="log" id="battle-log">' + logHtml + '</ul></div>';
+      '<div class="battle-main">' +
+      '<div class="board" style="--bw:' + s.map.w + ';--bh:' + s.map.h + '">' + boardHtml(s, hl) + '</div>' +
+      '<div class="battle-side">' + resultBox(s) + actionPanel(s) + unitInfo(shown, s) +
+      (escaped.length ? '<div class="escaped">🏁 Im Ziel: ' + escaped.map((u) => esc(u.icon + ' ' + u.name)).join(', ') + '</div>' : '') +
+      '<ul class="log" id="battle-log">' + logHtml + '</ul></div>' +
+      '</div></div>';
     const logEl = root.querySelector('#battle-log');
     logEl.scrollTop = logEl.scrollHeight;
     // Treffer-Animationen nur einmal anzeigen
@@ -310,12 +419,19 @@
       case 'auto':
         setup.auto = t.checked;
         // Im laufenden Kampf direkt übernehmen
-        if (fight && setup.auto && fight.awaiting) step();
+        if (fight && setup.auto && fight.awaiting) {
+          fight.awaiting = null;
+          fight.mode = null;
+          renderBattle();
+          timer = setTimeout(aiLoop, setup.speed);
+        }
         break;
     }
   }
 
   function onClick(e) {
+    const tile = e.target.closest('.grid.playing .tile');
+    if (tile && fight) { onTile(Number(tile.dataset.x), Number(tile.dataset.y)); return; }
     const btn = e.target.closest('[data-act]');
     if (!btn || btn.disabled) return;
     const act = btn.dataset.act;
@@ -342,15 +458,14 @@
         renderSetup();
         break;
       case 'to-setup': stop(); fight = null; renderSetup(); break;
-      case 'menu': fight.menu = btn.dataset.menu; renderBattle(); break;
-      case 'back': fight.pending = null; fight.menu = 'main'; renderBattle(); break;
-      case 'do-attack': choose({ type: 'attack' }); break;
-      case 'do-defend': choose({ type: 'defend' }); break;
-      case 'do-skill': choose({ type: 'skill', skill: Number(btn.dataset.i) }); break;
-      case 'do-item': choose({ type: 'item', item: btn.dataset.id }); break;
-      case 'target':
-        if (fight && fight.pending) perform(Object.assign({}, fight.pending, { target: btn.dataset.uid }));
-        break;
+      case 'menu': fight.menu = btn.dataset.menu; fight.mode = null; renderBattle(); break;
+      case 'back': fight.menu = 'main'; fight.mode = fight.state.turn.moved ? null : 'move'; renderBattle(); break;
+      case 'mode-move': fight.mode = 'move'; renderBattle(); break;
+      case 'end-turn': step(); break;
+      case 'do-attack': chooseAction({ type: 'attack' }); break;
+      case 'do-defend': chooseAction({ type: 'defend' }); break;
+      case 'do-skill': fight.menu = 'main'; chooseAction({ type: 'skill', skill: Number(btn.dataset.i) }); break;
+      case 'do-item': fight.menu = 'main'; chooseAction({ type: 'item', item: btn.dataset.id }); break;
     }
   }
 

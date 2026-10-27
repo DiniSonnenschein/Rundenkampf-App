@@ -5,10 +5,18 @@
   const { esc } = UI;
   const Store = Data.Store;
 
+  const MAP_TOOLS = [
+    ['.', '⬜ Boden'], ['#', '🧱 Wand'], ['S', '🟦 Start'], ['G', '🏁 Ziel'],
+    ['enemy', '👾 Gegner setzen'], ['erase', '✖ Gegner entfernen'],
+  ];
+
   let root = null;
   let type = 'levels';
   let selected = {};       // zuletzt gewählter Eintrag je Typ
   let filter = '';
+  let mapTool = '#';
+  let mapEnemy = null;
+  let painting = false;
 
   function schema() { return Data.SCHEMAS[type]; }
   function current() { return Store.get(type, selected[type]); }
@@ -29,9 +37,20 @@
     root.onclick = onClick;
     root.oninput = onInput;
     root.onchange = onInput;
+    root.onpointerdown = onPointerDown;
+    root.onpointermove = onPointerMove;
     renderList();
     renderForm();
   }
+
+  function unmount() {
+    if (!root) return;
+    root.onpointerdown = null;
+    root.onpointermove = null;
+  }
+
+  window.addEventListener('pointerup', () => { painting = false; });
+  window.addEventListener('pointercancel', () => { painting = false; });
 
   function renderList() {
     const ul = root.querySelector('#entity-list');
@@ -64,6 +83,7 @@
     const v = it[f.key];
     const wide = f.wide ? ' wide' : '';
     const label = '<span class="label">' + esc(f.label) + '</span>';
+    const hint = f.hint ? '<small class="hint">' + esc(f.hint) + '</small>' : '';
     switch (f.type) {
       case 'icon':
         return '<label class="field icon-field">' + label + '<input data-key="' + f.key + '" value="' + esc(v) + '" maxlength="8"></label>';
@@ -71,44 +91,154 @@
         return '<label class="field">' + label + '<input data-key="' + f.key + '" value="' + esc(v) + '"></label>';
       case 'number':
         return '<label class="field num-field">' + label + '<input type="number" data-key="' + f.key + '" data-num="1" value="' + esc(v) + '"' +
-          (f.min != null ? ' min="' + f.min + '"' : '') + (f.max != null ? ' max="' + f.max + '"' : '') + '></label>';
+          (f.min != null ? ' min="' + f.min + '"' : '') + (f.max != null ? ' max="' + f.max + '"' : '') + '>' + hint + '</label>';
       case 'textarea':
         return '<label class="field' + wide + '">' + label + '<textarea data-key="' + f.key + '" rows="3">' + esc(v) + '</textarea></label>';
       case 'select':
-        return '<label class="field">' + label + '<select data-key="' + f.key + '">' +
-          f.options.map(([val, txt]) => '<option value="' + val + '"' + (val === v ? ' selected' : '') + '>' + esc(txt) + '</option>').join('') +
-          '</select></label>';
+        return '<label class="field">' + label + selectHtml('data-key="' + f.key + '"', f.options, v) + hint + '</label>';
       case 'pick':
         return '<div class="field' + wide + '">' + label + UI.picklist(f.key, v, f.source) + '</div>';
       case 'skills':
         return '<div class="field' + wide + '">' + label + skillsTable(v) + '</div>';
+      case 'map':
+        return '<div class="field' + wide + '">' + label + mapEditor(it) + '</div>';
       default:
         return '';
     }
   }
 
-  function skillsTable(skills) {
-    const rows = skills.map((s, i) =>
-      '<tr>' +
-      '<td><input data-skill="' + i + '" data-skey="name" value="' + esc(s.name) + '"></td>' +
-      '<td><select data-skill="' + i + '" data-skey="kind">' +
-      '<option value="damage"' + (s.kind === 'damage' ? ' selected' : '') + '>Schaden</option>' +
-      '<option value="heal"' + (s.kind === 'heal' ? ' selected' : '') + '>Heilung</option></select></td>' +
-      '<td><input type="number" min="0" data-skill="' + i + '" data-skey="power" data-num="1" value="' + esc(s.power) + '"></td>' +
-      '<td><input type="number" min="0" data-skill="' + i + '" data-skey="mp" data-num="1" value="' + esc(s.mp) + '"></td>' +
-      '<td><select data-skill="' + i + '" data-skey="target">' +
-      '<option value="single"' + (s.target === 'single' ? ' selected' : '') + '>Ein Ziel</option>' +
-      '<option value="all"' + (s.target === 'all' ? ' selected' : '') + '>Alle</option></select></td>' +
-      '<td><button type="button" class="icon-btn danger" title="Entfernen" data-act="skill-del" data-i="' + i + '">✕</button></td>' +
-      '</tr>').join('');
-    return '<table class="skills"><thead><tr><th>Name</th><th>Art</th><th>Stärke</th><th>MP</th><th>Ziel</th><th></th></tr></thead>' +
-      '<tbody>' + (rows || '<tr><td colspan="6" class="muted">Keine Fähigkeiten.</td></tr>') + '</tbody></table>' +
-      '<button type="button" data-act="skill-add">+ Fähigkeit</button>';
+  function selectHtml(attrs, options, value) {
+    return '<select ' + attrs + '>' + options.map(([val, txt]) =>
+      '<option value="' + esc(val) + '"' + (val === value ? ' selected' : '') + '>' + esc(txt) + '</option>').join('') + '</select>';
   }
+
+  function skillsTable(skills) {
+    const rows = skills.map((s, i) => {
+      const attr = (k) => 'data-skill="' + i + '" data-skey="' + k + '"';
+      return '<tr>' +
+        '<td><input ' + attr('name') + ' value="' + esc(s.name) + '"></td>' +
+        '<td>' + selectHtml(attr('kind'), [['damage', 'Schaden'], ['heal', 'Heilung']], s.kind) + '</td>' +
+        '<td><input type="number" min="0" ' + attr('power') + ' data-num="1" value="' + esc(s.power) + '"></td>' +
+        '<td><input type="number" min="0" ' + attr('mp') + ' data-num="1" value="' + esc(s.mp) + '"></td>' +
+        '<td><input type="number" min="1" max="20" ' + attr('range') + ' data-num="1" value="' + esc(s.range) + '"></td>' +
+        '<td>' + selectHtml(attr('target'), Data.TARGET_OPTIONS.map(([v, t]) => [v, t.replace(/ \(.*\)/, '')]), s.target) + '</td>' +
+        '<td><button type="button" class="icon-btn danger" title="Entfernen" data-act="skill-del" data-i="' + i + '">✕</button></td>' +
+        '</tr>';
+    }).join('');
+    return '<table class="skills"><thead><tr><th>Name</th><th>Art</th><th>Stärke</th><th>MP</th><th>Reichw.</th><th>Ziel</th><th></th></tr></thead>' +
+      '<tbody>' + (rows || '<tr><td colspan="7" class="muted">Keine Fähigkeiten.</td></tr>') + '</tbody></table>' +
+      '<button type="button" data-act="skill-add">+ Fähigkeit</button>' +
+      '<small class="hint block">Reichweite 1 = Nahkampf. Fläche trifft das Ziel und alle Einheiten direkt daneben.</small>';
+  }
+
+  /* ---------- Map-Editor ---------- */
+
+  function mapEditor(it) {
+    const enemies = Store.list('enemies');
+    if (!enemies.some((e) => e.id === mapEnemy)) mapEnemy = enemies.length ? enemies[0].id : null;
+    const tools = MAP_TOOLS.map(([t, label]) =>
+      '<button type="button" class="tool' + (t === mapTool ? ' on' : '') + '" data-act="map-tool" data-tool="' + t + '">' + label + '</button>').join('');
+    return '<div class="map-tools">' +
+      '<label>Breite <input type="number" data-map="w" min="' + GridMap.LIMITS.minW + '" max="' + GridMap.LIMITS.maxW + '" value="' + it.map.w + '"></label>' +
+      '<label>Höhe <input type="number" data-map="h" min="' + GridMap.LIMITS.minH + '" max="' + GridMap.LIMITS.maxH + '" value="' + it.map.h + '"></label>' +
+      '</div>' +
+      '<div class="map-tools">' + tools +
+      (enemies.length ? selectHtml('data-map-enemy', enemies.map((e) => [e.id, e.icon + ' ' + e.name]), mapEnemy) : '<span class="muted">Noch keine Gegner angelegt.</span>') +
+      '</div>' +
+      '<div class="map-board" data-map-board>' + mapGrid(it) + '</div>' +
+      '<div data-map-info>' + mapInfo(it) + '</div>';
+  }
+
+  function mapGrid(it) {
+    const m = it.map;
+    let html = '<div class="grid editing" style="--w:' + m.w + ';--h:' + m.h + '">';
+    for (let y = 0; y < m.h; y++) {
+      for (let x = 0; x < m.w; x++) {
+        const p = it.enemies.find((e) => e.x === x && e.y === y);
+        const e = p && Store.get('enemies', p.id);
+        html += '<div class="tile ' + UI.tileClass(m.rows[y][x]) + '" data-x="' + x + '" data-y="' + y + '">' +
+          (e ? '<span class="token enemy" title="' + esc(e.name) + '">' + esc(e.icon) + '</span>' : '') + '</div>';
+      }
+    }
+    return html + '</div>';
+  }
+
+  function mapInfo(it) {
+    const m = it.map;
+    const starts = GridMap.startTiles(m);
+    const goals = GridMap.goalTiles(m);
+    const notes = [];
+    if (!m.rows.some((r) => r.includes('S'))) notes.push('Keine Startfelder gesetzt – die unterste Reihe wird genutzt.');
+    if (!m.rows.some((r) => r.includes('G'))) notes.push('Keine Zielfelder gesetzt – die oberste Reihe ist das Ziel.');
+    if (starts.length < it.maxParty) notes.push('Nur ' + starts.length + ' Startfelder für ' + it.maxParty + ' Allys – weitere werden daneben platziert.');
+    const reach = GridMap.bfs(m, starts);
+    if (!goals.length || !goals.some((g) => reach.has(GridMap.key(m, g.x, g.y)))) {
+      notes.push('⚠️ Das Ziel ist von den Startfeldern aus nicht erreichbar!');
+    }
+    const counts = UI.countIds(it.enemies.map((e) => e.id)).map(([id, n]) => {
+      const e = Store.get('enemies', id);
+      return e ? esc(e.icon + ' ' + e.name) + (n > 1 ? ' ×' + n : '') : '';
+    }).filter(Boolean).join(', ');
+    return '<p class="hint block">Wähle ein Werkzeug und tippe oder ziehe über die Felder. ' +
+      'Allys starten auf den blauen Startfeldern und müssen das Ziel erreichen.</p>' +
+      '<p class="map-enemies">Gegner auf der Map: ' + (counts || '<span class="muted">keine</span>') + '</p>' +
+      notes.map((n) => '<p class="map-note">' + esc(n) + '</p>').join('');
+  }
+
+  function refreshMap(it) {
+    root.querySelector('[data-map-board]').innerHTML = mapGrid(it);
+    root.querySelector('[data-map-info]').innerHTML = mapInfo(it);
+    const box = root.querySelector('.info-box');
+    if (box) box.outerHTML = extraInfo(it);
+  }
+
+  function applyTool(tileEl) {
+    const it = current();
+    if (!it || type !== 'levels' || !tileEl) return;
+    const x = Number(tileEl.dataset.x), y = Number(tileEl.dataset.y);
+    const idx = it.enemies.findIndex((e) => e.x === x && e.y === y);
+    if (mapTool === 'enemy') {
+      if (!mapEnemy) { UI.toast('Lege zuerst einen Gegner an'); return; }
+      if (it.map.rows[y][x] === '#') { UI.toast('Gegner können nicht auf Wänden stehen'); return; }
+      if (idx >= 0) it.enemies.splice(idx, 1);
+      it.enemies.push({ id: mapEnemy, x, y });
+    } else if (mapTool === 'erase') {
+      if (idx < 0) return;
+      it.enemies.splice(idx, 1);
+    } else {
+      if (it.map.rows[y][x] === mapTool) return;
+      GridMap.set(it.map, x, y, mapTool);
+      if (mapTool === '#' && idx >= 0) it.enemies.splice(idx, 1);
+    }
+    Store.save();
+    refreshMap(it);
+    renderList();
+  }
+
+  function tileFromEvent(e) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    return el && el.closest('.grid.editing .tile');
+  }
+
+  function onPointerDown(e) {
+    const tile = e.target.closest('.grid.editing .tile');
+    if (!tile) return;
+    e.preventDefault();
+    // Gelände lässt sich durch Ziehen malen, Gegner werden einzeln gesetzt
+    painting = mapTool !== 'enemy';
+    applyTool(tile);
+  }
+
+  function onPointerMove(e) {
+    if (!painting) return;
+    applyTool(tileFromEvent(e));
+  }
+
+  /* ---------- Sonstiges ---------- */
 
   function extraInfo(it) {
     if (type !== 'levels') return '';
-    const enemies = it.enemies.map((id) => Store.get('enemies', id)).filter(Boolean);
+    const enemies = it.enemies.map((p) => Store.get('enemies', p.id)).filter(Boolean);
     const hp = enemies.reduce((s, e) => s + Number(e.maxHp || 0), 0);
     const xp = enemies.reduce((s, e) => s + Number(e.xp || 0), 0);
     return '<div class="info-box">Gegner gesamt: <b>' + enemies.length + '</b> · Gesamt-HP: <b>' + hp + '</b> · EP: <b>' + xp + '</b>' +
@@ -122,8 +252,24 @@
       renderList();
       return;
     }
+    if (t.matches('[data-map-enemy]')) {
+      mapEnemy = t.value;
+      mapTool = 'enemy';
+      root.querySelectorAll('.tool').forEach((b) => b.classList.toggle('on', b.dataset.tool === 'enemy'));
+      return;
+    }
     const it = current();
     if (!it) return;
+    if (t.dataset.map) {
+      if (e.type !== 'change') return;  // erst nach der Eingabe anpassen
+      const w = t.dataset.map === 'w' ? t.value : it.map.w;
+      const h = t.dataset.map === 'h' ? t.value : it.map.h;
+      GridMap.resize(it.map, w, h, it.enemies);
+      Store.save();
+      renderForm();
+      renderList();
+      return;
+    }
     if (t.dataset.key) {
       let v = t.value;
       if (t.dataset.num) {
@@ -134,9 +280,15 @@
       it[t.dataset.key] = v;
       if (t.dataset.key === 'name') root.querySelector('[data-title]').textContent = v;
       if (t.dataset.key === 'icon') root.querySelector('.big-icon').textContent = v;
+      if (t.dataset.key === 'maxParty' && type === 'levels') root.querySelector('[data-map-info]').innerHTML = mapInfo(it);
     } else if (t.dataset.skill != null) {
       const s = it.skills[Number(t.dataset.skill)];
-      s[t.dataset.skey] = t.dataset.num ? Math.max(0, Number(t.value) || 0) : t.value;
+      let v = t.value;
+      if (t.dataset.num) {
+        v = Math.max(Number(t.min) || 0, Number(t.value) || 0);
+        if (t.max !== '') v = Math.min(Number(t.max), v);
+      }
+      s[t.dataset.skey] = v;
     } else {
       return;
     }
@@ -169,11 +321,14 @@
       renderList(); renderForm();
       UI.toast('Gelöscht');
     } else if (act === 'skill-add' && it) {
-      it.skills.push({ name: 'Neue Fähigkeit', kind: 'damage', power: 10, mp: 5, target: 'single' });
+      it.skills.push({ name: 'Neue Fähigkeit', kind: 'damage', power: 10, mp: 5, range: 1, target: 'single' });
       Store.save(); renderForm();
     } else if (act === 'skill-del' && it) {
       it.skills.splice(Number(btn.dataset.i), 1);
       Store.save(); renderForm();
+    } else if (act === 'map-tool') {
+      mapTool = btn.dataset.tool;
+      root.querySelectorAll('.tool').forEach((b) => b.classList.toggle('on', b === btn));
     } else if (act.startsWith('pick-') && it) {
       const key = btn.dataset.key;
       const id = act === 'pick-add' ? root.querySelector('[data-pick-select="' + key + '"]').value : btn.dataset.id;
@@ -183,5 +338,5 @@
     }
   }
 
-  global.Editor = { mount };
+  global.Editor = { mount, unmount };
 })(this);

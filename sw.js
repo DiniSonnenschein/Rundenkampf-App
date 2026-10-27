@@ -3,12 +3,13 @@
  * Online wird immer zuerst die neueste Version geladen (network first),
  * offline kommt sie aus dem Cache.
  */
-const CACHE = 'rundenkampf-v1';
+const CACHE = 'rundenkampf-v2';
 const ASSETS = [
   './',
   'index.html',
   'manifest.webmanifest',
   'css/style.css',
+  'js/map.js',
   'js/data.js',
   'js/battle.js',
   'js/ui.js',

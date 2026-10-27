@@ -9,6 +9,7 @@
 
   function show(name, opts) {
     if (currentView === 'test') TestMode.unmount();
+    else if (currentView) Editor.unmount();
     currentView = name;
     tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
     if (name === 'test') TestMode.mount(view, opts);

@@ -64,5 +64,10 @@
     return '<div class="bar ' + cls + '"><div style="width:' + pct + '%"></div><span>' + value + ' / ' + max + '</span></div>';
   }
 
-  global.UI = { esc, toast, countIds, picklist, applyPick, bar };
+  const TILE_CLASS = { '.': 't-floor', '#': 't-wall', S: 't-start', G: 't-goal' };
+  function tileClass(ch) {
+    return TILE_CLASS[ch] || 't-floor';
+  }
+
+  global.UI = { esc, toast, countIds, picklist, applyPick, bar, tileClass };
 })(this);
