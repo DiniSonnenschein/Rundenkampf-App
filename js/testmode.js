@@ -65,6 +65,7 @@
       enemies: enemies.filter((e) => e.def),
       items: Object.assign({}, setup.items),
       itemDefs: Store.list('objects'),
+      summonDefs: { allies: Store.list('allies'), enemies: Store.list('enemies') },
     };
   }
 
@@ -158,6 +159,7 @@
         const cls = ['tile', UI.tileClass(m.rows[y][x])];
         if (Battle.isGoal(s, x, y)) cls.push('goal');
         if (hl.reach && hl.reach.has(k)) cls.push('reach');
+        if (hl.summon && hl.summon.has(k)) cls.push('summon-tile');
         if (hl.range && hl.range.has(k)) cls.push('inrange');
         if (u && hl.targets && hl.targets.has(u.uid)) cls.push('target');
         html += '<div class="' + cls.join(' ') + '" data-x="' + x + '" data-y="' + y + '">' + (u ? tokenHtml(s, u, hl) : '') + '</div>';
@@ -165,6 +167,15 @@
     }
     return html + '</div>';
   }
+
+  const FLOAT_TEXT = {
+    dmg: (n) => '−' + n,
+    heal: (n) => '+' + n,
+    block: () => '🔰',
+    shield: () => '🔰',
+    freeze: () => '❄️',
+    summon: () => '✨',
+  };
 
   function tokenHtml(s, u, hl) {
     const ev = s.events.filter((e) => e.uid === u.uid);
@@ -175,11 +186,12 @@
       hl.inspect === u.uid ? 'inspected' : '',
       idle ? 'idle' : '',
       ev.some((e) => e.kind === 'dmg') ? 'hit' : ''].join(' ');
-    return '<div class="' + cls + '" title="' + esc(u.name) + '">' +
-      ev.filter((e) => e.kind !== 'move').map((e) =>
-        '<span class="float ' + e.kind + '">' + (e.kind === 'dmg' ? '−' : '+') + e.amount + '</span>').join('') +
+    const badge = u.frozen ? '❄️' : u.defending ? '🛡️' : idle ? '💤' : u.summoned ? '✨' : '';
+    return '<div class="' + cls + (u.frozen ? ' frozen' : '') + (u.shield ? ' shielded' : '') + '" title="' + esc(u.name) + '">' +
+      ev.filter((e) => FLOAT_TEXT[e.kind]).map((e) =>
+        '<span class="float ' + e.kind + '">' + FLOAT_TEXT[e.kind](e.amount) + '</span>').join('') +
       '<span class="token-icon">' + esc(u.icon) + '</span>' +
-      (u.defending ? '<span class="badge">🛡️</span>' : idle ? '<span class="badge">💤</span>' : '') +
+      (badge ? '<span class="badge">' + badge + '</span>' : '') +
       '<span class="mini-hp"><span style="width:' + pct + '%"></span></span></div>';
   }
 
@@ -254,7 +266,11 @@
       return;
     }
     fight.mode = action;
-    if (!Battle.targets(s, fight.awaiting, action).length) UI.toast('Kein Ziel in Reichweite (' + info.range + ')');
+    if (info.scope === 'tile') {
+      if (!Battle.summonTiles(s, fight.awaiting, action).length) UI.toast('Kein freies Feld in Reichweite (' + info.range + ')');
+    } else if (!Battle.targets(s, fight.awaiting, action).length) {
+      UI.toast('Kein Ziel in Reichweite (' + info.range + ')');
+    }
     renderBattle();
   }
 
@@ -264,6 +280,12 @@
     const u = Battle.unitAt(s, x, y);
     if (a && fight.mode === 'move' && Battle.reachable(s, a).some((t) => t.x === x && t.y === y)) {
       Battle.move(s, a, x, y);
+      afterPlayerStep();
+      return;
+    }
+    if (a && fight.mode && fight.mode !== 'move' &&
+      Battle.summonTiles(s, a, fight.mode).some((t) => t.x === x && t.y === y)) {
+      Battle.act(s, a, Object.assign({}, fight.mode, { x, y }));
       afterPlayerStep();
       return;
     }
@@ -283,6 +305,9 @@
       u.escaped ? '🏁 im Ziel' : '',
       u.hp <= 0 ? '💀 besiegt' : '',
       u.defending ? '🛡️ verteidigt' : '',
+      u.frozen ? '❄️ eingefroren (' + u.frozen + (u.frozen === 1 ? ' Zug' : ' Züge') + ')' : '',
+      u.shield ? '🔰 Schild ' + u.shield : '',
+      u.summoned ? '✨ beschworen' + (u.lifeTurns !== null ? ' (noch ' + u.lifeTurns + (u.lifeTurns === 1 ? ' Zug)' : ' Züge)') : '') : '',
       u.side === 'enemy' && !u.alerted ? '💤 hat euch noch nicht bemerkt (Sicht ' + u.sight + ')' : '',
       u.buffAtk ? '⚔️ +' + u.buffAtk : '',
       u.buffDef ? '🛡 +' + u.buffDef : '',
@@ -296,6 +321,22 @@
       (status ? '<div class="stats">' + status + '</div>' : '') + '</div>';
   }
 
+  function skillSummary(sk) {
+    const area = sk.target === 'area' ? ' · Fläche' : sk.target === 'all' ? ' · alle' : '';
+    const turns = (n) => n + (n === 1 ? ' Zug' : ' Züge');
+    switch (sk.kind) {
+      case 'heal': return 'Heilung ' + sk.power + ' · RW ' + sk.range + area;
+      case 'shield': return 'Schild ' + sk.power + ' · ' + turns(sk.duration) + ' · RW ' + sk.range + area;
+      case 'freeze': return 'Freeze ' + turns(sk.duration) + (sk.power ? ' + ' + sk.power + ' Schaden' : '') + ' · RW ' + sk.range + area;
+      case 'summon': {
+        const def = (Store.list(fight.awaiting && fight.awaiting.side === 'enemy' ? 'enemies' : 'allies')).find((d) => d.id === sk.summon);
+        return 'Beschwört ' + (sk.power > 1 ? sk.power + '× ' : '') + (def ? def.icon + ' ' + def.name : '?') +
+          (sk.duration ? ' · ' + turns(sk.duration) : '') + ' · RW ' + sk.range;
+      }
+      default: return 'Schaden ' + sk.power + ' · RW ' + sk.range + area;
+    }
+  }
+
   function actionPanel(s) {
     const a = fight.awaiting;
     if (s.winner) return '';
@@ -306,7 +347,12 @@
     const t = s.turn;
     let hint = '';
     if (fight.mode === 'move') hint = 'Tippe auf ein markiertes Feld, um dich zu bewegen (bis zu ' + a.move + ' Felder).';
-    else if (fight.mode) hint = 'Wähle ein rot markiertes Ziel (Reichweite ' + Battle.actionInfo(s, a, fight.mode).range + ').';
+    else if (fight.mode) {
+      const info = Battle.actionInfo(s, a, fight.mode);
+      hint = info.scope === 'tile'
+        ? 'Tippe auf ein lila markiertes Feld, um dort zu beschwören (Reichweite ' + info.range + ').'
+        : 'Wähle ein markiertes Ziel (Reichweite ' + info.range + ').';
+    }
     else if (!t.acted) hint = 'Wähle eine Aktion.';
 
     const on = (cond) => (cond ? ' class="on"' : '');
@@ -322,8 +368,7 @@
     } else if (fight.menu === 'skill') {
       buttons = a.skills.map((sk, i) =>
         '<button data-act="do-skill" data-i="' + i + '"' + (a.mp < sk.mp ? ' disabled' : '') + '>' +
-        esc(sk.name) + ' <small>' + (sk.kind === 'heal' ? 'Heilung' : 'Schaden') + ' ' + sk.power +
-        ' · RW ' + sk.range + (sk.target === 'area' ? ' · Fläche' : sk.target === 'all' ? ' · alle' : '') + ' · ' + sk.mp + ' MP</small></button>').join('') +
+        esc(sk.name) + ' <small>' + skillSummary(sk) + ' · ' + sk.mp + ' MP</small></button>').join('') +
         '<button data-act="back">← Zurück</button>';
     } else if (fight.menu === 'item') {
       const ids = Object.keys(s.items).filter((id) => s.items[id] > 0 && s.itemDefs[id]);
@@ -368,8 +413,12 @@
       hl.reach = new Set(Battle.reachable(s, a).map((t) => GridMap.key(s.map, t.x, t.y)));
     } else if (a && fight.mode) {
       const info = Battle.actionInfo(s, a, fight.mode);
-      if (info.valid) hl.range = tilesInRange(s, a, info.range);
-      hl.targets = new Set(Battle.targets(s, a, fight.mode).map((u) => u.uid));
+      if (info.scope === 'tile') {
+        hl.summon = new Set(Battle.summonTiles(s, a, fight.mode).map((t) => GridMap.key(s.map, t.x, t.y)));
+      } else {
+        if (info.valid) hl.range = tilesInRange(s, a, info.range);
+        hl.targets = new Set(Battle.targets(s, a, fight.mode).map((u) => u.uid));
+      }
     }
     const order = [s.current].concat(s.queue)
       .map((uid) => Battle.byUid(s, uid)).filter((u) => u && Battle.isActive(u))

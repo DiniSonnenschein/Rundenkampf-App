@@ -13,17 +13,31 @@
 
   const MAX_ROUNDS = 100;
   const AREA_RADIUS = 1;
+  const SKILL_KINDS = ['damage', 'heal', 'shield', 'freeze', 'summon'];
 
   function num(v, fallback) {
     const n = Number(v);
     return Number.isFinite(n) ? n : fallback;
   }
 
-  function makeUnit(src, side, index) {
+  function makeSkill(s) {
+    return {
+      name: s.name || 'Fähigkeit',
+      kind: SKILL_KINDS.includes(s.kind) ? s.kind : 'damage',
+      power: num(s.power, 0),
+      mp: Math.max(0, num(s.mp, 0)),
+      range: Math.max(1, num(s.range, 1)),
+      target: ['single', 'area', 'all'].includes(s.target) ? s.target : 'single',
+      duration: Math.max(0, num(s.duration, 0)),
+      summon: s.summon || null,
+    };
+  }
+
+  function makeUnit(src, side, uid) {
     const maxHp = Math.max(1, num(src.maxHp, 1));
     const maxMp = Math.max(0, num(src.maxMp, 0));
     return {
-      uid: side + '-' + index,
+      uid,
       side,
       id: src.id,
       name: src.name || '???',
@@ -37,18 +51,17 @@
       range: Math.max(1, num(src.range, 1)),
       sight: Math.max(0, num(src.sight, 5)),
       xp: num(src.xp, 0),
-      skills: (src.skills || []).map((s) => ({
-        name: s.name || 'Fähigkeit',
-        kind: s.kind === 'heal' ? 'heal' : 'damage',
-        power: num(s.power, 0),
-        mp: Math.max(0, num(s.mp, 0)),
-        range: Math.max(1, num(s.range, 1)),
-        target: ['single', 'area', 'all'].includes(s.target) ? s.target : 'single',
-      })),
+      skills: (src.skills || []).map(makeSkill),
       x: -1, y: -1,
       buffAtk: 0,
       buffDef: 0,
       defending: false,
+      shield: 0,        // Schildpunkte
+      shieldTurns: 0,   // eigene Züge, die der Schild noch hält
+      frozen: 0,        // eigene Züge, die ausgesetzt werden
+      summoned: false,
+      summoner: null,
+      lifeTurns: null,  // beschworene Einheit: verbleibende Züge (null = dauerhaft)
       escaped: false,
       alerted: side === 'ally',
     };
@@ -79,18 +92,21 @@
     return state.goals.has(GridMap.key(state.map, x, y));
   }
 
+  function isFree(state, x, y) {
+    return GridMap.passable(state.map, x, y) && !unitAt(state, x, y) && !isGoal(state, x, y);
+  }
+
   // Nächstes freies, begehbares Feld (kein Ziel) ab (x, y)
   function nearestFree(state, x, y) {
     const map = state.map;
     const sx = Math.max(0, Math.min(map.w - 1, x));
     const sy = Math.max(0, Math.min(map.h - 1, y));
-    const ok = (px, py) => GridMap.passable(map, px, py) && !unitAt(state, px, py) && !isGoal(state, px, py);
-    if (ok(sx, sy)) return { x: sx, y: sy };
+    if (isFree(state, sx, sy)) return { x: sx, y: sy };
     // Ringförmig nach außen suchen (auch über Wände hinweg)
     for (let r = 1; r < Math.max(map.w, map.h); r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) === r && ok(sx + dx, sy + dy)) return { x: sx + dx, y: sy + dy };
+          if (Math.max(Math.abs(dx), Math.abs(dy)) === r && isFree(state, sx + dx, sy + dy)) return { x: sx + dx, y: sy + dy };
         }
       }
     }
@@ -99,19 +115,24 @@
 
   /**
    * @param {object}   opts
-   * @param {object}   opts.map       { w, h, rows }
-   * @param {object[]} opts.allies    Ally-Definitionen (werden auf Startfelder gestellt)
-   * @param {object[]} opts.enemies   [{ def, x, y }] – ohne x/y wird oben automatisch platziert
-   * @param {object}   opts.items     { objektId: anzahl }
-   * @param {object[]} opts.itemDefs  Objekt-Definitionen
+   * @param {object}   opts.map        { w, h, rows }
+   * @param {object[]} opts.allies     Ally-Definitionen (werden auf Startfelder gestellt)
+   * @param {object[]} opts.enemies    [{ def, x, y }] – ohne x/y wird oben automatisch platziert
+   * @param {object}   opts.items      { objektId: anzahl }
+   * @param {object[]} opts.itemDefs   Objekt-Definitionen
+   * @param {object}   [opts.summonDefs] { allies: [...], enemies: [...] } – beschwörbare Figuren
    * @param {string}   [opts.goalRule] 'all' (alle überlebenden Allys) oder 'one'
-   * @param {function} [opts.rng]     Zufallsfunktion (0..1)
-   * @param {boolean}  [opts.quiet]   Kein Kampflog schreiben
+   * @param {function} [opts.rng]      Zufallsfunktion (0..1)
+   * @param {boolean}  [opts.quiet]    Kein Kampflog schreiben
    */
   function create(opts) {
     const map = GridMap.normalize(opts.map ? JSON.parse(JSON.stringify(opts.map)) : null);
     const itemDefs = {};
     (opts.itemDefs || []).forEach((d) => { itemDefs[d.id] = d; });
+    const summonDefs = opts.summonDefs || {
+      allies: opts.allies || [],
+      enemies: (opts.enemies || []).map((e) => e.def || e),
+    };
     const state = {
       map,
       goals: new Set(GridMap.goalTiles(map).map((t) => GridMap.key(map, t.x, t.y))),
@@ -119,6 +140,8 @@
       units: [],
       items: Object.assign({}, opts.items || {}),
       itemDefs,
+      summonDefs,
+      summonCount: 0,
       round: 0,
       queue: [],
       current: null,
@@ -133,7 +156,7 @@
 
     const enemies = (opts.enemies || []).map((e, i) => {
       const def = e.def || e;
-      return { unit: makeUnit(def, 'enemy', i), x: e.x, y: e.y };
+      return { unit: makeUnit(def, 'enemy', 'enemy-' + i), x: e.x, y: e.y };
     });
     labelDuplicates(enemies.map((e) => e.unit));
     enemies.forEach((e) => {
@@ -146,8 +169,8 @@
 
     const starts = GridMap.startTiles(map);
     (opts.allies || []).forEach((a, i) => {
-      const u = makeUnit(a, 'ally', i);
-      const free = starts.find((t) => !unitAt(state, t.x, t.y) && !isGoal(state, t.x, t.y));
+      const u = makeUnit(a, 'ally', 'ally-' + i);
+      const free = starts.find((t) => isFree(state, t.x, t.y));
       const last = starts[starts.length - 1] || { x: Math.floor(map.w / 2), y: map.h - 1 };
       const pos = free || nearestFree(state, last.x, last.y);
       if (!pos) return;
@@ -176,9 +199,10 @@
     return side === 'ally' ? 'enemy' : 'ally';
   }
 
+  // Beschworene Einheiten zählen nicht für Sieg oder Niederlage
   function checkWinner(state) {
     if (state.winner) return state.winner;
-    const allies = state.units.filter((u) => u.side === 'ally');
+    const allies = state.units.filter((u) => u.side === 'ally' && !u.summoned);
     const escaped = allies.filter((u) => u.escaped).length;
     const active = allies.filter(isActive).length;
     if (state.goalRule === 'one' && escaped) state.winner = 'ally';
@@ -197,11 +221,37 @@
     }
   }
 
+  /**
+   * Zugbeginn: Schild läuft ab, Beschwörungen verschwinden, Eingefrorene setzen aus.
+   * Gibt false zurück, wenn die Einheit in diesem Zug nicht handeln kann.
+   */
+  function startTurn(state, u) {
+    u.defending = false;
+    if (u.shieldTurns > 0 && --u.shieldTurns === 0 && u.shield > 0) {
+      u.shield = 0;
+      log(state, 'Der Schild von ' + u.name + ' ist verflogen.', 'info');
+    }
+    if (u.lifeTurns !== null) {
+      if (u.lifeTurns <= 0) {
+        u.hp = 0;
+        log(state, u.name + ' verschwindet.', 'info');
+        return false;
+      }
+      u.lifeTurns--;
+    }
+    if (u.frozen > 0) {
+      u.frozen--;
+      log(state, u.name + ' ist eingefroren und setzt aus.', 'freeze');
+      return false;
+    }
+    return true;
+  }
+
   /** Nächste Einheit am Zug bestimmen. Gibt null zurück, wenn der Kampf vorbei ist. */
   function next(state) {
-    if (checkWinner(state)) { state.current = null; state.turn = null; return null; }
     let actor = null;
     while (!actor) {
+      if (checkWinner(state)) { state.current = null; state.turn = null; return null; }
       if (!state.queue.length) {
         state.round++;
         if (checkWinner(state)) { state.current = null; state.turn = null; return null; }
@@ -212,9 +262,8 @@
         log(state, 'Runde ' + state.round, 'round');
       }
       const u = byUid(state, state.queue.shift());
-      if (u && isActive(u)) actor = u;
+      if (u && isActive(u) && startTurn(state, u)) actor = u;
     }
-    actor.defending = false;
     state.current = actor.uid;
     state.turn = { uid: actor.uid, moved: false, acted: false };
     if (actor.side === 'enemy') alertCheck(state, actor);
@@ -234,8 +283,9 @@
   /* ---------- Bewegung ---------- */
 
   // Kontrollzone: Wer ein Feld neben einem Gegner betritt, muss dort stehen bleiben.
+  // Eingefrorene Gegner halten niemanden auf.
   function inZoc(foes, x, y) {
-    return foes.some((f) => Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) === 1);
+    return foes.some((f) => !f.frozen && Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) === 1);
   }
 
   /**
@@ -265,7 +315,7 @@
     state.turn.moved = true;
     state.events = [{ uid: actor.uid, kind: 'move' }];
     log(state, actor.name + ' bewegt sich ' + dest.steps + (dest.steps === 1 ? ' Feld.' : ' Felder.'), 'move');
-    if (actor.side === 'ally' && isGoal(state, x, y)) {
+    if (actor.side === 'ally' && !actor.summoned && isGoal(state, x, y)) {
       actor.escaped = true;
       log(state, actor.name + ' hat das Ziel erreicht!', 'win');
     }
@@ -282,7 +332,15 @@
 
   /* ---------- Aktionen ---------- */
 
-  /** Beschreibt Seite, Wirkungsart und Reichweite einer Aktion. */
+  function summonDef(state, actor, skill) {
+    const list = state.summonDefs[actor.side === 'ally' ? 'allies' : 'enemies'] || [];
+    return list.find((d) => d.id === skill.summon) || null;
+  }
+
+  /**
+   * Beschreibt Seite, Wirkungsart und Reichweite einer Aktion.
+   * scope: 'single' | 'area' | 'all' | 'none' | 'tile' (Beschwörung auf ein freies Feld)
+   */
   function actionInfo(state, actor, action) {
     if (!isTurnOf(state, actor)) return { valid: false, reason: 'Nicht am Zug' };
     if (state.turn.acted) return { valid: false, reason: 'Schon gehandelt' };
@@ -294,10 +352,16 @@
       case 'skill': {
         const s = actor.skills[action.skill];
         if (!s) return { valid: false, reason: 'Unbekannte Fähigkeit' };
-        const ok = actor.mp >= s.mp;
+        let reason = actor.mp >= s.mp ? '' : 'Nicht genug MP';
+        if (s.kind === 'summon') {
+          if (!reason && actor.summoned) reason = 'Beschworene können nicht beschwören';
+          if (!reason && !summonDef(state, actor, s)) reason = 'Keine Figur zum Beschwören eingestellt';
+          return { side: actor.side, scope: 'tile', range: s.range, valid: !reason, reason };
+        }
+        const friendly = s.kind === 'heal' || s.kind === 'shield';
         return {
-          side: s.kind === 'heal' ? actor.side : opponent(actor.side),
-          scope: s.target, range: s.range, valid: ok, reason: ok ? '' : 'Nicht genug MP',
+          side: friendly ? actor.side : opponent(actor.side),
+          scope: s.target, range: s.range, valid: !reason, reason,
         };
       }
       case 'item': {
@@ -320,10 +384,23 @@
   /** Wählbare Ziele (in Reichweite). Bei Wirkung auf "alle" sind alle der Seite betroffen. */
   function targets(state, actor, action) {
     const info = actionInfo(state, actor, action);
-    if (!info.valid || info.scope === 'none') return [];
+    if (!info.valid || info.scope === 'none' || info.scope === 'tile') return [];
     const side = alive(state, info.side);
     if (info.scope === 'all') return side;
     return side.filter((u) => GridMap.dist(actor, u) <= info.range);
+  }
+
+  /** Freie Felder in Reichweite für eine Beschwörung: [{ x, y }]. */
+  function summonTiles(state, actor, action) {
+    const info = actionInfo(state, actor, action);
+    if (!info.valid || info.scope !== 'tile') return [];
+    const out = [];
+    for (let y = actor.y - info.range; y <= actor.y + info.range; y++) {
+      for (let x = actor.x - info.range; x <= actor.x + info.range; x++) {
+        if (isFree(state, x, y)) out.push({ x, y });
+      }
+    }
+    return out;
   }
 
   /** Alle Einheiten, die eine Aktion mit diesem Ziel trifft. */
@@ -350,8 +427,17 @@
   }
 
   function applyDamage(state, target, dmg, suffix) {
-    target.hp = Math.max(0, target.hp - dmg);
     target.alerted = true;
+    if (target.shield > 0) {
+      const absorbed = Math.min(target.shield, dmg);
+      target.shield -= absorbed;
+      dmg -= absorbed;
+      log(state, 'Der Schild von ' + target.name + ' fängt ' + absorbed + ' Schaden ab' +
+        (target.shield === 0 ? ' und zerbricht.' : '.'), 'buff');
+      if (target.shield === 0) target.shieldTurns = 0;
+      if (dmg === 0) { event(state, target, 'block', absorbed); return; }
+    }
+    target.hp = Math.max(0, target.hp - dmg);
     event(state, target, 'dmg', dmg);
     log(state, target.name + ' erleidet ' + dmg + ' Schaden' + (suffix || '') + '.', 'dmg');
     if (target.hp === 0) log(state, target.name + ' wurde besiegt!', 'ko');
@@ -364,6 +450,45 @@
     log(state, target.name + ' erhält ' + (target.hp - before) + ' HP.', 'heal');
   }
 
+  function applyShield(state, target, points, turns) {
+    target.shield = Math.max(target.shield, Math.round(points));
+    target.shieldTurns = Math.max(target.shieldTurns, Math.max(1, turns));
+    event(state, target, 'shield', target.shield);
+    log(state, target.name + ' erhält einen Schild (' + target.shield + ').', 'buff');
+  }
+
+  function applyFreeze(state, actor, target, skill) {
+    if (skill.power > 0) dealDamage(state, actor, target, skill.power);
+    if (target.hp <= 0) return;
+    const turns = Math.max(1, skill.duration);
+    target.frozen = Math.max(target.frozen, turns);
+    target.defending = false;
+    event(state, target, 'freeze', turns);
+    log(state, target.name + ' ist für ' + turns + (turns === 1 ? ' Zug' : ' Züge') + ' eingefroren.', 'freeze');
+  }
+
+  function summon(state, actor, skill, x, y) {
+    const def = summonDef(state, actor, skill);
+    const count = Math.max(1, Math.min(10, Math.round(skill.power) || 1));
+    let placed = 0;
+    for (let i = 0; i < count; i++) {
+      const pos = i === 0 ? { x, y } : nearestFree(state, x, y);
+      if (!pos) break;
+      const u = makeUnit(def, actor.side, 'summon-' + (++state.summonCount));
+      u.summoned = true;
+      u.summoner = actor.uid;
+      u.alerted = true;
+      u.xp = 0;
+      u.lifeTurns = skill.duration > 0 ? skill.duration : null;
+      u.x = pos.x; u.y = pos.y;
+      state.units.push(u);
+      event(state, u, 'summon', 1);
+      placed++;
+    }
+    log(state, actor.name + ' beschwört ' + (placed > 1 ? placed + '× ' : '') + def.name +
+      (skill.duration > 0 ? ' für ' + skill.duration + (skill.duration === 1 ? ' Zug' : ' Züge') : '') + '.', 'summon');
+  }
+
   /** Führt eine Aktion aus. Gibt false zurück, wenn sie ungültig ist (z. B. Ziel außer Reichweite). */
   function act(state, actor, action) {
     const info = actionInfo(state, actor, action);
@@ -372,6 +497,9 @@
     if (info.scope === 'single' || info.scope === 'area') {
       target = targets(state, actor, action).find((u) => u.uid === action.target);
       if (!target) return false;
+    }
+    if (info.scope === 'tile' && !summonTiles(state, actor, action).some((t) => t.x === action.x && t.y === action.y)) {
+      return false;
     }
     const hit = affected(state, actor, action, target);
     const onTarget = target ? ' auf ' + target.name : '';
@@ -390,9 +518,12 @@
       case 'skill': {
         const s = actor.skills[action.skill];
         actor.mp -= s.mp;
+        if (s.kind === 'summon') { summon(state, actor, s, action.x, action.y); break; }
         log(state, actor.name + ' setzt ' + s.name + ' ein' + onTarget + '.', 'action');
         hit.forEach((t) => {
           if (s.kind === 'heal') heal(state, t, s.power + actor.atk * 0.25);
+          else if (s.kind === 'shield') applyShield(state, t, s.power, s.duration);
+          else if (s.kind === 'freeze') applyFreeze(state, actor, t, s);
           else dealDamage(state, actor, t, s.power);
         });
         break;
@@ -430,14 +561,21 @@
     return units.slice().sort((a, b) => a.hp - b.hp)[0];
   }
 
+  function strongest(units) {
+    return units.slice().sort((a, b) => b.atk - a.atk || b.hp - a.hp)[0];
+  }
+
   /** Beste Aktion von der aktuellen Position aus – oder null, wenn nichts sinnvoll/möglich ist. */
   function aiAction(state, actor) {
     const opts = (action) => targets(state, actor, action);
     const usable = actor.skills.map((s, i) => ({ s, i })).filter((x) => x.s.mp <= actor.mp);
+    const ofKind = (kind) => usable.filter((x) => x.s.kind === kind);
     const hurt = (list) => list.filter((u) => u.hp / u.maxHp < 0.4);
+    const foes = alive(state, opponent(actor.side));
+    const threatened = (u) => foes.some((f) => !f.frozen && GridMap.dist(f, u) <= 2);
 
     // 1. Verletzte heilen
-    const heals = usable.filter((x) => x.s.kind === 'heal').sort((a, b) => b.s.power - a.s.power);
+    const heals = ofKind('heal').sort((a, b) => b.s.power - a.s.power);
     for (const h of heals) {
       const action = { type: 'skill', skill: h.i };
       const inRange = hurt(opts(action));
@@ -453,9 +591,36 @@
       }
     }
 
-    // 2. Angreifen
+    // 2. Verstärkung beschwören, wenn noch keine eigene Beschwörung lebt
+    const ownSummons = alive(state, actor.side).filter((u) => u.summoner === actor.uid);
+    if (!ownSummons.length && foes.length) {
+      for (const sm of ofKind('summon')) {
+        const action = { type: 'skill', skill: sm.i };
+        const tiles = summonTiles(state, actor, action);
+        if (!tiles.length) continue;
+        const near = (t) => Math.min(...foes.map((f) => GridMap.dist(t, f)));
+        const tile = tiles.sort((a, b) => near(a) - near(b))[0];
+        return Object.assign(action, { x: tile.x, y: tile.y });
+      }
+    }
+
+    // 3. Starken Gegner einfrieren
+    for (const fz of ofKind('freeze')) {
+      const action = { type: 'skill', skill: fz.i };
+      const inRange = opts(action).filter((u) => !u.frozen);
+      if (inRange.length && state.rng() < 0.6) return Object.assign(action, { target: strongest(inRange).uid });
+    }
+
+    // 4. Bedrohte Verbündete schützen
+    for (const sh of ofKind('shield')) {
+      const action = { type: 'skill', skill: sh.i };
+      const inRange = opts(action).filter((u) => !u.shield && threatened(u));
+      if (inRange.length && state.rng() < 0.5) return Object.assign(action, { target: lowestHp(inRange).uid });
+    }
+
+    // 5. Angreifen
     const basic = opts({ type: 'attack' });
-    const skillOpts = usable.filter((x) => x.s.kind === 'damage')
+    const skillOpts = ofKind('damage')
       .map((x) => ({ x, action: { type: 'skill', skill: x.i } }))
       .filter((o) => opts(o.action).length);
     if (skillOpts.length && (!basic.length || state.rng() < 0.6)) {
@@ -491,8 +656,8 @@
       if (!best || score < best.score || (score === best.score && t.steps < best.t.steps)) best = { t, score };
     };
 
-    if (actor.side === 'ally' && state.goalDist.has(GridMap.key(map, actor.x, actor.y))) {
-      // Richtung Ziel, unterwegs gern in Angriffsreichweite
+    // Allys laufen zum Ziel; Beschworene jagen stattdessen Gegner
+    if (actor.side === 'ally' && !actor.summoned && state.goalDist.has(GridMap.key(map, actor.x, actor.y))) {
       options.forEach((t) => {
         const d = state.goalDist.get(GridMap.key(map, t.x, t.y));
         if (d == null) return;
@@ -562,7 +727,7 @@
       else if (state.winner === 'enemy') result.losses++;
       else result.draws++;
       result.rounds += Math.min(state.round, MAX_ROUNDS);
-      const allies = state.units.filter((u) => u.side === 'ally');
+      const allies = state.units.filter((u) => u.side === 'ally' && !u.summoned);
       const total = allies.reduce((s, u) => s + u.maxHp, 0) || 1;
       result.hpLeft += allies.reduce((s, u) => s + u.hp, 0) / total;
       allies.forEach((u) => {
@@ -578,9 +743,9 @@
   }
 
   const Battle = {
-    MAX_ROUNDS, AREA_RADIUS,
+    MAX_ROUNDS, AREA_RADIUS, SKILL_KINDS,
     create, next, turnDone, reachable, move, skipMove,
-    actionInfo, targets, affected, act,
+    actionInfo, targets, summonTiles, affected, act,
     aiAction, aiStep, autoPlay, simulate,
     alive, byUid, unitAt, isActive, isGoal,
   };

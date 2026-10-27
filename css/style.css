@@ -117,10 +117,6 @@ main {
 .save-hint { font-size: .85em; margin-top: 16px; }
 .empty-state { text-align: center; padding: 40px 0; }
 
-.skills { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-.skills th { text-align: left; font-weight: 500; color: var(--muted); font-size: .8em; padding: 0 4px 4px; }
-.skills td { padding: 3px 4px; }
-.skills td:nth-child(3), .skills td:nth-child(4) { width: 80px; }
 .icon-btn { padding: 4px 9px; }
 
 .picklist { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -309,6 +305,9 @@ main {
   .data-menu button, .data-menu .btn { padding: 4px 8px; font-size: .8em; }
   .editor { grid-template-columns: 1fr; }
   .list-panel { position: static; max-height: 300px; }
+  .skill-head { flex-wrap: wrap; }
+  .skill-head .skill-name { flex: 1 1 100%; }
+  .skill-head select { flex: 1; }
   .battle-main { grid-template-columns: 1fr; gap: 10px; }
   .battle-main .board { width: min(100%, calc((100svh - 290px) * var(--bw, 9) / var(--bh, 10))); }
   .battle-top { gap: 6px; }
@@ -316,10 +315,30 @@ main {
   .action-buttons { gap: 6px; }
   .action-buttons button { padding: 5px 9px; font-size: .9em; }
   .log { max-height: 160px; }
-  .skills, .skills tbody, .skills tr { display: block; }
-  .skills thead { display: none; }
-  .skills tr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px; }
-  .skills td:nth-child(3), .skills td:nth-child(4) { width: auto; }
 }
 
 .survival th { font-weight: 500; color: var(--muted); font-size: .8em; text-align: right; }
+
+/* ---------- Schutz / Freeze / Beschwörung ---------- */
+.tile.summon-tile { box-shadow: inset 0 0 0 100px rgba(167, 120, 240, .45); outline: 1px solid rgba(190, 150, 255, .9); outline-offset: -1px; }
+.tile.summon-tile:hover { box-shadow: inset 0 0 0 100px rgba(167, 120, 240, .7); }
+.token.frozen { background: rgba(120, 190, 255, .45); filter: saturate(.6); }
+.token.shielded { box-shadow: 0 0 0 3px rgba(120, 200, 255, .85), 0 0 10px rgba(120, 200, 255, .6); }
+.token.shielded.current { box-shadow: 0 0 0 3px var(--accent), 0 0 0 6px rgba(120, 200, 255, .85); }
+.float.block, .float.shield, .float.freeze, .float.summon { color: #fff; }
+.log .freeze { color: #8fd0ff; }
+.log .summon { color: #c9a7ff; }
+
+.skills { display: grid; gap: 10px; margin-bottom: 8px; }
+.skill-card { background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid var(--enemy); border-radius: 8px; padding: 10px; }
+.skill-card.kind-heal { border-left-color: var(--heal); }
+.skill-card.kind-shield { border-left-color: #78c8ff; }
+.skill-card.kind-freeze { border-left-color: #a8e4ff; }
+.skill-card.kind-summon { border-left-color: #b98cff; }
+.skill-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.skill-head .skill-name { flex: 1; font-weight: 600; }
+.skill-head select { width: auto; }
+.skill-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.sk-field { display: flex; flex-direction: column; gap: 3px; font-size: .8em; color: var(--muted); }
+.sk-field.wide { grid-column: span 2; }
+.sk-field input, .sk-field select { font-size: 1.15em; color: var(--text); }

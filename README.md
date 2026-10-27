@@ -41,8 +41,19 @@ Adresse oben erreichbar. Jeder neue Push aktualisiert sie automatisch.
 Feldarten: ⬜ Boden, 🧱 Wand, 🟦 Startfeld der Allys, 🏁 Ziel. Gegner werden mit „Gegner setzen“ auf ein Feld gestellt.
 Ohne Start-/Zielfelder gelten die unterste bzw. oberste Reihe. Der Editor warnt, wenn das Ziel nicht erreichbar ist.
 
-Fähigkeiten haben eine Art (Schaden/Heilung), Stärke, MP-Kosten, Reichweite und ein Ziel
-(ein Ziel · Fläche = Ziel + direkte Nachbarfelder · alle).
+Fähigkeiten haben MP-Kosten, eine Reichweite und eine von fünf Arten:
+
+| Art | Wirkung | Werte |
+|-----|---------|-------|
+| ⚔️ Schaden | Angriff + Stärke − halbe Verteidigung | Stärke, Ziel |
+| 💚 Heilung | Stärke + ¼ Angriff HP | Stärke, Ziel |
+| 🔰 Schutz | Schild, der Schaden abfängt, bis er aufgebraucht ist oder die Dauer abläuft | Schildpunkte, Dauer, Ziel |
+| ❄️ Freeze | Ziel setzt Züge aus und hält niemanden auf (keine Kontrollzone) | Zusatzschaden, Dauer, Ziel |
+| ✨ Ally beschwören | Figur aus der Ally-Liste erscheint auf einem freien Feld in Reichweite (bei Gegnern: aus der Gegner-Liste) | Figur, Anzahl, Dauer (0 = dauerhaft) |
+
+Ziel: ein Ziel · Fläche (Ziel + direkte Nachbarfelder) · alle. Die Dauer zählt in eigenen Zügen der betroffenen Figur.
+Beschworene Figuren kämpfen mit (die KI lässt sie Gegner jagen), zählen aber nicht für Sieg oder Niederlage,
+können das Ziel nicht „erreichen“, selbst nicht beschwören und geben keine EP.
 Alles wird automatisch im Browser gespeichert (localStorage). Über **Export/Import** lassen sich
 die Daten als JSON-Datei sichern bzw. laden; **Beispiele** lädt einen Demo-Datensatz.
 

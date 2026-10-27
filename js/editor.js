@@ -112,23 +112,48 @@
       '<option value="' + esc(val) + '"' + (val === value ? ' selected' : '') + '>' + esc(txt) + '</option>').join('') + '</select>';
   }
 
+  // Bedeutung der Werte je nach Art der Fähigkeit
+  const SKILL_FIELDS = {
+    damage: { power: 'Stärke', target: true },
+    heal: { power: 'Stärke', target: true },
+    shield: { power: 'Schildpunkte', duration: 'Dauer (Züge)', target: true },
+    freeze: { power: 'Zusatzschaden', duration: 'Dauer (Züge)', target: true },
+    summon: { summon: true, power: 'Anzahl', duration: 'Dauer (0 = immer)' },
+  };
+
+  const SKILL_HINTS = {
+    damage: 'Schaden = Angriff + Stärke − halbe Verteidigung des Ziels.',
+    heal: 'Heilt Stärke + ¼ Angriff HP.',
+    shield: 'Das Ziel bekommt einen Schild, der Schaden abfängt, bis er aufgebraucht ist oder die Dauer (eigene Züge des Ziels) abläuft.',
+    freeze: 'Das Ziel setzt für die Dauer seine Züge aus und hält niemanden auf. Zusatzschaden 0 = kein Schaden.',
+    summon: 'Die Figur erscheint auf einem freien Feld in Reichweite und kämpft mit. Sie zählt nicht für die Siegbedingung.',
+  };
+
   function skillsTable(skills) {
+    const kinds = Data.skillKinds(type);
+    const pool = Store.list(type);
     const rows = skills.map((s, i) => {
       const attr = (k) => 'data-skill="' + i + '" data-skey="' + k + '"';
-      return '<tr>' +
-        '<td><input ' + attr('name') + ' value="' + esc(s.name) + '"></td>' +
-        '<td>' + selectHtml(attr('kind'), [['damage', 'Schaden'], ['heal', 'Heilung']], s.kind) + '</td>' +
-        '<td><input type="number" min="0" ' + attr('power') + ' data-num="1" value="' + esc(s.power) + '"></td>' +
-        '<td><input type="number" min="0" ' + attr('mp') + ' data-num="1" value="' + esc(s.mp) + '"></td>' +
-        '<td><input type="number" min="1" max="20" ' + attr('range') + ' data-num="1" value="' + esc(s.range) + '"></td>' +
-        '<td>' + selectHtml(attr('target'), Data.TARGET_OPTIONS.map(([v, t]) => [v, t.replace(/ \(.*\)/, '')]), s.target) + '</td>' +
-        '<td><button type="button" class="icon-btn danger" title="Entfernen" data-act="skill-del" data-i="' + i + '">✕</button></td>' +
-        '</tr>';
+      const f = SKILL_FIELDS[s.kind] || SKILL_FIELDS.damage;
+      const num = (k, label, min, max) => '<label class="sk-field"><span>' + esc(label) + '</span><input type="number" min="' + min + '"' +
+        (max != null ? ' max="' + max + '"' : '') + ' ' + attr(k) + ' data-num="1" value="' + esc(s[k]) + '"></label>';
+      const sel = (k, label, options) => '<label class="sk-field wide"><span>' + esc(label) + '</span>' + selectHtml(attr(k), options, s[k]) + '</label>';
+      return '<div class="skill-card kind-' + esc(s.kind) + '">' +
+        '<div class="skill-head"><input class="skill-name" ' + attr('name') + ' value="' + esc(s.name) + '">' +
+        selectHtml(attr('kind') + ' data-rerender="1"', kinds, s.kind) +
+        '<button type="button" class="icon-btn danger" title="Entfernen" data-act="skill-del" data-i="' + i + '">✕</button></div>' +
+        '<div class="skill-body">' +
+        (f.summon ? sel('summon', 'Figur', [['', '– wählen –']].concat(pool.map((c) => [c.id, c.icon + ' ' + c.name]))) : '') +
+        num('power', f.power, f.summon ? 1 : 0, f.summon ? 10 : null) +
+        (f.duration ? num('duration', f.duration, s.kind === 'summon' ? 0 : 1, 99) : '') +
+        num('mp', 'MP', 0) +
+        num('range', 'Reichweite', 1, 20) +
+        (f.target ? sel('target', 'Ziel', Data.TARGET_OPTIONS.map(([v, t]) => [v, t.replace(/ \(.*\)/, '')])) : '') +
+        '</div><small class="hint block">' + esc(SKILL_HINTS[s.kind] || '') + '</small></div>';
     }).join('');
-    return '<table class="skills"><thead><tr><th>Name</th><th>Art</th><th>Stärke</th><th>MP</th><th>Reichw.</th><th>Ziel</th><th></th></tr></thead>' +
-      '<tbody>' + (rows || '<tr><td colspan="7" class="muted">Keine Fähigkeiten.</td></tr>') + '</tbody></table>' +
+    return '<div class="skills">' + (rows || '<p class="muted">Keine Fähigkeiten.</p>') + '</div>' +
       '<button type="button" data-act="skill-add">+ Fähigkeit</button>' +
-      '<small class="hint block">Reichweite 1 = Nahkampf. Fläche trifft das Ziel und alle Einheiten direkt daneben.</small>';
+      '<small class="hint block">Reichweite 1 = Nahkampf bzw. Nachbarfeld. Fläche trifft das Ziel und alle Einheiten direkt daneben.</small>';
   }
 
   /* ---------- Map-Editor ---------- */
@@ -288,7 +313,16 @@
         v = Math.max(Number(t.min) || 0, Number(t.value) || 0);
         if (t.max !== '') v = Math.min(Number(t.max), v);
       }
+      if (t.dataset.skey === 'summon' && !v) v = null;
       s[t.dataset.skey] = v;
+      if (t.dataset.skey === 'kind' && e.type === 'change') {
+        // Passende Startwerte für die neue Art übernehmen
+        Object.assign(s, Data.SKILL_DEFAULTS[v]);
+        if (v === 'summon' && !s.summon) s.summon = (Store.list(type).find((c) => c.id !== it.id) || {}).id || null;
+        Store.save();
+        renderForm();
+        return;
+      }
     } else {
       return;
     }
@@ -321,7 +355,7 @@
       renderList(); renderForm();
       UI.toast('Gelöscht');
     } else if (act === 'skill-add' && it) {
-      it.skills.push({ name: 'Neue Fähigkeit', kind: 'damage', power: 10, mp: 5, range: 1, target: 'single' });
+      it.skills.push({ name: 'Neue Fähigkeit', kind: 'damage', power: 10, mp: 5, range: 1, target: 'single', duration: 0, summon: null });
       Store.save(); renderForm();
     } else if (act === 'skill-del' && it) {
       it.skills.splice(Number(btn.dataset.i), 1);

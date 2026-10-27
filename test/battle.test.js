@@ -217,3 +217,114 @@ test('Alte Daten ohne Map werden übernommen', () => {
   assert.strictEqual(e.skills[0].target, 'area');
   assert.strictEqual(e.skills[0].range, 3);
 });
+
+/* ---------- Schutz, Freeze, Beschwören ---------- */
+
+// Kleines Testfeld: Einheit `uid` ist sofort am Zug
+function turnOf(state, uid) {
+  state.round = Math.max(1, state.round);
+  state.queue = [uid];
+  return Battle.next(state);
+}
+
+test('Schutz: Schild fängt Schaden ab und läuft nach der Dauer ab', () => {
+  const state = Battle.create({
+    map: map('G....', '.....', '..S..'),
+    allies: [ally('a-ritter')],
+    enemies: [{ def: enemy('e-ork'), x: 2, y: 1 }],
+    rng: () => 0.5,
+  });
+  const knight = state.units.find((u) => u.side === 'ally');
+  const ork = state.units.find((u) => u.side === 'enemy');
+  turnOf(state, knight.uid);
+  assert.ok(Battle.act(state, knight, { type: 'skill', skill: 1, target: knight.uid }));
+  assert.strictEqual(knight.shield, 30);
+  turnOf(state, ork.uid);
+  Battle.act(state, ork, { type: 'attack', target: knight.uid });
+  assert.strictEqual(knight.hp, knight.maxHp, 'Schaden komplett abgefangen');
+  assert.ok(knight.shield < 30);
+  turnOf(state, knight.uid); // Dauer 2 → noch aktiv
+  assert.ok(knight.shield > 0);
+  turnOf(state, knight.uid); // abgelaufen
+  assert.strictEqual(knight.shield, 0);
+});
+
+test('Freeze: Ziel setzt aus und hält niemanden auf', () => {
+  const state = Battle.create({
+    map: map('GGGGG', '#...#', '#...#', '#...#', '#.S.#'),
+    allies: [ally('a-magierin')],
+    enemies: [{ def: enemy('e-ork'), x: 2, y: 2 }],
+    rng: () => 0.5,
+  });
+  const mage = state.units.find((u) => u.side === 'ally');
+  const ork = state.units.find((u) => u.side === 'enemy');
+  turnOf(state, mage.uid);
+  assert.ok(Battle.act(state, mage, { type: 'skill', skill: 2, target: ork.uid }));
+  assert.strictEqual(ork.frozen, 1);
+  assert.ok(ork.hp < ork.maxHp, 'Zusatzschaden');
+  // Kontrollzone gilt nicht für Eingefrorene
+  assert.ok(Battle.reachable(state, mage).some((t) => t.y === 1));
+  // Der Ork kommt nicht zum Zug
+  state.queue = [ork.uid, mage.uid];
+  assert.strictEqual(Battle.next(state).uid, mage.uid);
+  assert.strictEqual(ork.frozen, 0);
+});
+
+test('Beschwören: Figur erscheint auf freiem Feld, zählt nicht für den Sieg und verschwindet', () => {
+  const state = Battle.create({
+    map: map('GGGGG', '.....', '.....', '.....', '..S..'),
+    allies: [ally('a-beschwoererin')],
+    summonDefs: { allies: SAMPLE.allies, enemies: SAMPLE.enemies },
+  });
+  const caster = state.units[0];
+  turnOf(state, caster.uid);
+  const action = { type: 'skill', skill: 0 };
+  const tiles = Battle.summonTiles(state, caster, action);
+  assert.ok(tiles.length > 0 && tiles.every((t) => GridMap.dist(t, caster) <= 2));
+  assert.strictEqual(Battle.act(state, caster, Object.assign({}, action, { x: 4, y: 0 })), false, 'Ziel-/Außerhalb-Feld ungültig');
+  assert.ok(Battle.act(state, caster, Object.assign({}, action, { x: 2, y: 2 })));
+  const wolf = state.units.find((u) => u.summoned);
+  assert.strictEqual(wolf.name, 'Geisterwolf');
+  assert.deepStrictEqual([wolf.x, wolf.y], [2, 2]);
+  // Beschwörerin fällt → Niederlage, obwohl der Wolf noch lebt
+  caster.hp = 0;
+  state.queue = [];
+  assert.strictEqual(Battle.next(state), null);
+  assert.strictEqual(state.winner, 'enemy');
+});
+
+test('Beschwörung mit Dauer verschwindet nach ihren Zügen', () => {
+  const state = Battle.create({
+    map: map('GGGGG', '.....', '.....', '.....', '..S..'),
+    allies: [ally('a-beschwoererin')],
+    summonDefs: { allies: SAMPLE.allies, enemies: [] },
+  });
+  const caster = state.units[0];
+  turnOf(state, caster.uid);
+  Battle.act(state, caster, { type: 'skill', skill: 0, x: 2, y: 2 });
+  const wolf = state.units.find((u) => u.summoned);
+  for (let i = 0; i < 4; i++) assert.strictEqual(turnOf(state, wolf.uid).uid, wolf.uid);
+  state.queue = [wolf.uid, caster.uid];
+  assert.strictEqual(Battle.next(state).uid, caster.uid);
+  assert.strictEqual(wolf.hp, 0);
+});
+
+test('KI nutzt Beschwören, Freeze und Schutz', () => {
+  const r = Battle.simulate({
+    map: SAMPLE.levels[3].map,
+    allies: ['a-ritter', 'a-magierin', 'a-beschwoererin'].map(ally),
+    enemies: SAMPLE.levels[3].enemies.map((p) => ({ def: enemy(p.id), x: p.x, y: p.y })),
+    summonDefs: { allies: SAMPLE.allies, enemies: SAMPLE.enemies },
+  }, 10);
+  assert.strictEqual(r.wins + r.losses + r.draws, 10);
+  const state = Battle.autoPlay(Battle.create({
+    map: SAMPLE.levels[3].map,
+    allies: ['a-ritter', 'a-magierin', 'a-beschwoererin'].map(ally),
+    enemies: SAMPLE.levels[3].enemies.map((p) => ({ def: enemy(p.id), x: p.x, y: p.y })),
+    summonDefs: { allies: SAMPLE.allies, enemies: SAMPLE.enemies },
+    rng: seeded(7),
+  }));
+  const text = state.log.map((l) => l.text).join('\n');
+  assert.match(text, /beschwört/);
+  assert.match(text, /eingefroren/);
+});

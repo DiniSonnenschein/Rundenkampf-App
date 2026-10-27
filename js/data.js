@@ -11,6 +11,21 @@
 
   const TARGET_OPTIONS = [['single', 'Ein Ziel'], ['area', 'Fläche (Ziel + Nachbarfelder)'], ['all', 'Alle']];
 
+  /** Arten von Fähigkeiten. Beschwören holt Figuren derselben Liste (Allys bzw. Gegner). */
+  function skillKinds(type) {
+    return [['damage', 'Schaden'], ['heal', 'Heilung'], ['shield', 'Schutz'], ['freeze', 'Freeze'],
+      ['summon', type === 'enemies' ? 'Gegner beschwören' : 'Ally beschwören']];
+  }
+
+  // Startwerte, wenn eine Fähigkeit auf diese Art umgestellt wird
+  const SKILL_DEFAULTS = {
+    damage: { power: 10, duration: 0, target: 'single' },
+    heal: { power: 20, duration: 0, target: 'single' },
+    shield: { power: 25, duration: 2, target: 'single' },
+    freeze: { power: 0, duration: 1, target: 'single' },
+    summon: { power: 1, duration: 0, target: 'single' },
+  };
+
   const characterFields = [
     { key: 'icon', label: 'Symbol', type: 'icon', default: '🙂' },
     { key: 'name', label: 'Name', type: 'text', default: 'Neue Figur' },
@@ -80,7 +95,8 @@
     },
   };
 
-  const skill = (name, kind, power, mp, range, target) => ({ name, kind, power, mp, range, target: target || 'single' });
+  const skill = (name, kind, power, mp, range, target, extra) =>
+    Object.assign({ name, kind, power, mp, range, target: target || 'single', duration: 0, summon: null }, extra);
   const at = (id, x, y) => ({ id, x, y });
 
   const SAMPLE = {
@@ -92,15 +108,22 @@
     ],
     allies: [
       { id: 'a-ritter', icon: '🛡️', name: 'Ritter', maxHp: 140, maxMp: 10, atk: 14, def: 14, spd: 8, move: 3, range: 1,
-        skills: [skill('Schildschlag', 'damage', 8, 3, 1)], description: 'Robuster Nahkämpfer.' },
+        skills: [skill('Schildschlag', 'damage', 8, 3, 1), skill('Schutzwall', 'shield', 30, 4, 1, 'single', { duration: 2 })],
+        description: 'Robuster Nahkämpfer, schützt Verbündete.' },
       { id: 'a-magierin', icon: '🧙', name: 'Magierin', maxHp: 80, maxMp: 40, atk: 9, def: 6, spd: 11, move: 3, range: 1,
-        skills: [skill('Feuerball', 'damage', 18, 6, 4), skill('Blitzsturm', 'damage', 10, 10, 3, 'area')], description: 'Mächtige Fernzauber, wenig Ausdauer.' },
+        skills: [skill('Feuerball', 'damage', 18, 6, 4), skill('Blitzsturm', 'damage', 10, 10, 3, 'area'),
+          skill('Frostbann', 'freeze', 4, 8, 3, 'single', { duration: 1 })], description: 'Mächtige Fernzauber, wenig Ausdauer.' },
       { id: 'a-heiler', icon: '💚', name: 'Heiler', maxHp: 90, maxMp: 35, atk: 7, def: 8, spd: 10, move: 3, range: 1,
         skills: [skill('Heilen', 'heal', 30, 5, 3), skill('Gruppenheilung', 'heal', 18, 12, 1, 'all')], description: 'Hält das Team am Leben.' },
       { id: 'a-schurkin', icon: '🗡️', name: 'Schurkin', maxHp: 95, maxMp: 15, atk: 15, def: 7, spd: 15, move: 5, range: 1,
         skills: [skill('Doppelstich', 'damage', 12, 4, 1)], description: 'Schnell und gefährlich.' },
       { id: 'a-jaegerin', icon: '🏹', name: 'Jägerin', maxHp: 85, maxMp: 15, atk: 12, def: 6, spd: 12, move: 3, range: 4,
         skills: [skill('Pfeilhagel', 'damage', 6, 6, 4, 'area')], description: 'Greift aus der Distanz an.' },
+      { id: 'a-beschwoererin', icon: '🔮', name: 'Beschwörerin', maxHp: 75, maxMp: 40, atk: 8, def: 6, spd: 10, move: 3, range: 1,
+        skills: [skill('Wolf rufen', 'summon', 1, 12, 2, 'single', { duration: 4, summon: 'a-wolf' }), skill('Arkaner Schlag', 'damage', 10, 4, 3)],
+        description: 'Ruft einen Geisterwolf zu Hilfe.' },
+      { id: 'a-wolf', icon: '🐺', name: 'Geisterwolf', maxHp: 60, maxMp: 0, atk: 13, def: 5, spd: 14, move: 5, range: 1,
+        skills: [], description: 'Wird von der Beschwörerin gerufen.' },
     ],
     enemies: [
       { id: 'e-schleim', icon: '🟢', name: 'Schleim', maxHp: 40, maxMp: 0, atk: 8, def: 3, spd: 6, move: 2, range: 1, sight: 3, xp: 5, skills: [], description: 'Langsam und harmlos.' },
@@ -111,7 +134,8 @@
       { id: 'e-ork', icon: '👹', name: 'Ork', maxHp: 120, maxMp: 8, atk: 15, def: 9, spd: 7, move: 3, range: 1, sight: 4, xp: 25,
         skills: [skill('Keulenhieb', 'damage', 10, 4, 1)], description: '' },
       { id: 'e-drache', icon: '🐉', name: 'Drache', maxHp: 320, maxMp: 50, atk: 20, def: 12, spd: 9, move: 3, range: 1, sight: 7, xp: 200,
-        skills: [skill('Feueratem', 'damage', 8, 10, 3, 'area'), skill('Klauenhieb', 'damage', 14, 5, 1)], description: 'Der Endgegner.' },
+        skills: [skill('Feueratem', 'damage', 8, 10, 3, 'area'), skill('Klauenhieb', 'damage', 14, 5, 1),
+          skill('Brut rufen', 'summon', 2, 15, 2, 'single', { summon: 'e-fledermaus' })], description: 'Der Endgegner. Ruft Fledermäuse.' },
     ],
     levels: [
       {
@@ -180,6 +204,8 @@
       item.skills = (item.skills || []).map((s) => Object.assign({}, s, {
         range: s.range === undefined ? 3 : s.range,
         target: s.target === 'all' && s.kind !== 'heal' && s.range === undefined ? 'area' : s.target,
+        duration: s.duration === undefined ? 0 : s.duration,
+        summon: s.summon === undefined ? null : s.summon,
       }));
     }
     if (type === 'objects' && item.range === undefined && item.effect === 'damage') {
@@ -240,7 +266,10 @@
 
     remove(type, id) {
       this.data[type] = this.data[type].filter((x) => x.id !== id);
-      // Verweise in Leveln aufräumen
+      // Verweise aufräumen
+      if (type === 'allies' || type === 'enemies') {
+        this.data[type].forEach((c) => c.skills.forEach((s) => { if (s.summon === id) s.summon = null; }));
+      }
       this.data.levels.forEach((l) => {
         if (type === 'enemies') l.enemies = l.enemies.filter((e) => e.id !== id);
         if (type === 'objects') l.rewards = l.rewards.filter((x) => x !== id);
@@ -262,7 +291,7 @@
     clear() { this.data = emptyData(); this.save(); },
   };
 
-  const Data = { SCHEMAS, SAMPLE, TYPES, TARGET_OPTIONS, Store, clone, normalize };
+  const Data = { SCHEMAS, SAMPLE, TYPES, TARGET_OPTIONS, SKILL_DEFAULTS, skillKinds, Store, clone, normalize };
   if (typeof module !== 'undefined' && module.exports) module.exports = Data;
   else global.Data = Data;
 })(this);
