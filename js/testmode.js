@@ -218,7 +218,7 @@
     }
     const head = '<div class="action-head">' + esc(a.icon + ' ' + a.name) + ' ist am Zug</div>';
     if (fight.pending) {
-      return '<div class="action-panel">' + head + '<p>Wähle ein Ziel (anklicken).</p>' +
+      return '<div class="action-panel">' + head + '<p>Wähle ein Ziel aus (Karte antippen).</p>' +
         '<button data-act="back">← Zurück</button></div>';
     }
     let buttons = '';

@@ -58,6 +58,9 @@ h2, h3, h4 { margin: 0 0 .6em; }
 .topbar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
   padding: 10px 18px;
+  padding-top: calc(10px + env(safe-area-inset-top));
+  padding-left: calc(18px + env(safe-area-inset-left));
+  padding-right: calc(18px + env(safe-area-inset-right));
   background: #101116;
   border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 10;
@@ -72,7 +75,11 @@ h2, h3, h4 { margin: 0 0 .6em; }
 .data-menu { display: flex; gap: 6px; flex-wrap: wrap; }
 .data-menu button, .data-menu .btn { font-size: .88em; padding: 5px 10px; }
 
-main { padding: 18px; max-width: 1400px; margin: 0 auto; }
+main {
+  padding: 18px;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  max-width: 1400px; margin: 0 auto;
+}
 
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 
@@ -239,10 +246,25 @@ main { padding: 18px; max-width: 1400px; margin: 0 auto; }
 @keyframes floatUp { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-28px); } }
 
 @media (max-width: 800px) {
-  main { padding: 12px; }
+  main { padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .topbar { position: static; gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .brand { font-size: 1em; }
+  .tabs { flex: 1 1 100%; order: 3; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tabs button { white-space: nowrap; }
+  .tab-group-label { display: none; }
+  .data-menu { margin-left: auto; }
+  .data-menu button, .data-menu .btn { padding: 4px 8px; font-size: .8em; }
   .editor { grid-template-columns: 1fr; }
   .list-panel { position: static; max-height: 300px; }
-  .arena { grid-template-columns: 1fr; gap: 14px; padding: 12px; }
+  .arena { grid-template-columns: 1fr; gap: 14px; padding: 10px; }
+  .side { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .unit { flex-direction: column; align-items: stretch; gap: 4px; padding: 8px; }
+  .unit.current { transform: none; }
+  .unit-icon { font-size: 1.6em; width: auto; position: absolute; top: 4px; right: 8px; }
+  .unit-name { font-size: .9em; padding-right: 2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 14px; }
+  .bar span { line-height: 14px; }
+  .log { max-height: 160px; }
   .skills, .skills tbody, .skills tr { display: block; }
   .skills thead { display: none; }
   .skills tr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px; }

@@ -56,6 +56,24 @@
     UI.toast('Alle Daten gelöscht');
   });
 
+  // Installierbare App (PWA): Service Worker + eigener Installieren-Knopf (Chrome/Edge/Android)
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* offline-Modus nicht verfügbar */ });
+  }
+  const installBtn = document.getElementById('btn-install');
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    installBtn.hidden = false;
+  });
+  installBtn.addEventListener('click', () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    installPrompt.userChoice.finally(() => { installPrompt = null; installBtn.hidden = true; });
+  });
+  window.addEventListener('appinstalled', () => { installBtn.hidden = true; UI.toast('App installiert'); });
+
   Store.load();
   let start = 'levels';
   try { start = localStorage.getItem('rundenkampf-view') || start; } catch (e) { /* ignorieren */ }

@@ -5,8 +5,28 @@ Das eigentliche Spiel folgt später – die Kampf-Engine (`js/battle.js`) ist da
 
 ## Starten
 
-Keine Installation nötig: einfach `index.html` im Browser öffnen.
-Alternativ mit lokalem Server: `npm start` → <http://localhost:8080>
+**Online (empfohlen):** <https://dinisonnenschein.github.io/Rundenkampf-App/>
+(sobald GitHub Pages aktiviert ist, siehe unten)
+
+**Lokal:** `index.html` im Browser öffnen – oder `npm start` → <http://localhost:8080>
+
+## Als App installieren (Icon auf dem Startbildschirm)
+
+Die App ist eine *Progressive Web App* und funktioniert nach dem ersten Öffnen auch offline.
+Installieren klappt nur über die Online-Adresse (HTTPS), nicht über eine lokal geöffnete Datei.
+
+- **iPhone/iPad (Safari):** Teilen-Symbol ⬆️ → „Zum Home-Bildschirm“
+- **Android (Chrome):** Menü ⋮ → „App installieren“ bzw. „Zum Startbildschirm hinzufügen“
+- **PC (Chrome/Edge):** Knopf „📲 Installieren“ oben in der App oder Install-Symbol in der Adressleiste
+
+### GitHub Pages einmalig aktivieren
+
+Repository auf GitHub → **Settings** → **Pages** → bei *Source* „Deploy from a branch“ wählen →
+Branch `ccr-158abe65-z3ymq2` und Ordner `/ (root)` → **Save**. Nach ca. 1–2 Minuten ist die App unter der
+Adresse oben erreichbar. Jeder neue Push aktualisiert sie automatisch.
+
+> Hinweis: Die Daten liegen im Speicher des jeweiligen Browsers bzw. der installierten App.
+> Zum Übertragen auf ein anderes Gerät: **Export** → Datei rüberschicken → **Import**.
 
 ## Erstell-Modus
 
@@ -45,7 +65,8 @@ js/data.js        Schemas, Beispieldaten, Speicherung
 js/battle.js      Kampf-Engine (ohne DOM, auch in Node nutzbar)
 js/editor.js      Erstell-Modus (generischer Editor aus den Schemas)
 js/testmode.js    Test-Modus
-js/app.js         Navigation, Import/Export
+js/app.js         Navigation, Import/Export, Installation
+manifest.webmanifest, sw.js, icons/   App-Installation & Offline-Modus
 test/             Tests der Kampf-Engine
 ```
 
